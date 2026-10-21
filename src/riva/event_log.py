@@ -10,6 +10,7 @@ from typing import TextIO
 class EventName(StrEnum):
     SESSION_STARTED = "session.started"
     RECORDING_SAVED = "recording.saved"
+    STREAM_REPLAY_SKIPPED = "stream.replay_skipped"
     ASR_FINALIZED = "asr.finalized"
     RESPONSE_STARTED = "response.started"
     PLAYBACK_STOPPED = "playback.stopped"

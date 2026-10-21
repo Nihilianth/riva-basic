@@ -30,6 +30,12 @@ chunk on stop. The archive contains the received mono stream, not a guaranteed
 complete browser recording. Compare the replay with what you said during testing.
 There are no trustworthy word timestamps or SRT exports in this step.
 
+Gradio can also invoke its stream callback again with the last request when closing
+the stream. The ASR app stamps incoming HTTP deliveries and ignores reprocessing
+of the same delivery. This does **not** remove repeated words or identical audio
+from genuinely new deliveries. The status shows skipped delivery replays and logs
+emit `stream.replay_skipped`. This guard does not recover an unsent tail chunk.
+
 Default model: `gpt-live-transcribe`, German hint, low transcription delay, one
 WebSocket connection per turn, stateful resampling to mono PCM16 at 24 kHz. Model
 access depends on your OpenAI project. `--model gpt-transcribe` is an alternative

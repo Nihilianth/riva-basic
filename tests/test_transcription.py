@@ -284,12 +284,16 @@ def test_asr_callbacks_save_final_text_and_cache_copy(
     monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
     monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
     sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    import gradio as gr
+
+    from riva.experiments.gradio_delivery import DELIVERY_FIELD
+
     identity = new_development_session()
     app = build_asr_app(sessions)
     handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
     try:
         handlers["begin"](identity)
-        handlers["append"](audio(), identity)
+        handlers["append"](audio(), identity, gr.EventData(None, {DELIVERY_FIELD: "a" * 32}))
         handlers["stopped"](identity)
         playback, details = handlers["finish"](identity)
         assert Path(playback).is_relative_to(tmp_path / "cache")
@@ -366,3 +370,89 @@ def test_missing_key_fails_before_network_access(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="missing_api_key"):
         connect_openai()
+
+
+def test_replayed_delivery_is_ignored_but_identical_new_audio_is_kept(tmp_path: Path) -> None:
+    sessions = AsrSessions(RecordingStore(tmp_path), AsrConfig(), FakeWire)
+    identity = new_development_session()
+    try:
+        sessions.begin(identity)
+        chunk = audio()
+        sessions.append(chunk, identity, delivery_id="a" * 32)
+        sessions.append(chunk, identity, delivery_id="a" * 32)
+        assert sessions.snapshot(identity)[1] == 0.5
+        # Identical audio in a new delivery is legitimate, not a semantic duplicate.
+        sessions.append(chunk, identity, delivery_id="b" * 32)
+        assert sessions.snapshot(identity)[1] == 1
+        sessions.current(identity).stopped = True
+        sessions.append(chunk, identity, delivery_id="b" * 32)
+        assert sessions.current(identity).replays_skipped == 2
+        saved = sessions.finish(identity)
+        assert saved.metadata.duration_seconds == 1
+        assert sessions.snapshot(identity)[0].status == "completed"
+    finally:
+        sessions.release(identity)
+
+
+def test_real_gradio_routes_preserve_delivery_identity_on_stream_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    import asyncio
+
+    import gradio as gr
+    from fastapi.testclient import TestClient
+    from gradio.helpers import special_args
+    from gradio.routes import App
+
+    from riva.experiments.asr_stream import asr_app_kwargs
+    from riva.experiments.gradio_delivery import DELIVERY_FIELD
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    app = build_asr_app(sessions)
+    index = next(i for i, fn in app.fns.items() if fn.fn and fn.fn.__name__ == "append")
+    handler = app.fns[index].fn
+    server = App.create_app(app, app_kwargs=asr_app_kwargs(app), mcp_server=False)
+    event = None
+
+    async def capture_push(body, request, username):
+        nonlocal event
+        event = SimpleNamespace(data=body, signal=asyncio.Event(), run_time=0)
+        app._queue.event_ids_to_events["synthetic-stream"] = event
+        return True, "synthetic-stream", "success"
+
+    monkeypatch.setattr(app._queue, "push", capture_push)
+    identity = new_development_session()
+    sessions.begin(identity)
+
+    def dispatch(body):
+        args, *_ = special_args(
+            handler, inputs=[audio(), identity], event_data=gr.EventData(None, body.event_data)
+        )
+        handler(*args)
+
+    try:
+        with TestClient(server) as client:
+            body = {"fn_index": index, "data": [], "session_hash": "synthetic-session"}
+            assert client.post("/gradio_api/queue/join", json=body).status_code == 200
+            assert event is not None
+            first_body = event.data
+            dispatch(first_body)
+            assert client.post("/gradio_api/stream/synthetic-stream", json=body).status_code == 200
+            second_body = event.data
+            assert first_body.event_data[DELIVERY_FIELD] != second_body.event_data[DELIVERY_FIELD]
+            dispatch(second_body)
+            assert client.post("/gradio_api/stream/synthetic-stream/close").status_code == 200
+            assert event.data is second_body
+            # The queue close wakeup can now re-dispatch this exact body safely.
+            dispatch(event.data)
+        assert sessions.snapshot(identity)[1] == 1
+        assert sessions.current(identity).replays_skipped == 1
+        sessions.current(identity).stopped = True
+        assert sessions.finish(identity).metadata.duration_seconds == 1
+    finally:
+        sessions.release(identity)

@@ -1,16 +1,17 @@
 """German streaming transcription experiment: native Gradio chunks → OpenAI WS."""
 
-from __future__ import annotations
-
 import argparse
 import os
+import re
 import sys
 import threading
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from starlette.middleware import Middleware
 
 from riva.audio.recordings import (
     AudioInput,
@@ -23,6 +24,7 @@ from riva.audio.transcription import AsrConfig, LiveTurn, Transcript, Wire, conn
 from riva.audio.transcripts import save_transcript
 from riva.event_log import Event, EventName, write_event
 from riva.experiments.audio_capture import prepare_environment
+from riva.experiments.gradio_delivery import DELIVERY_FIELD, AudioDeliveryMiddleware
 
 if TYPE_CHECKING:
     import gradio as gr
@@ -34,6 +36,8 @@ class SessionTurn:
     stopped: bool = False
     saved: SavedRecording | None = None
     persisted: bool = False
+    delivery_ids: set[str] = field(default_factory=set)
+    replays_skipped: int = 0
 
 
 class AsrSessions:
@@ -62,13 +66,31 @@ class AsrSessions:
         with self.lock:
             return self.turns[identity.session_id]
 
-    def append(self, audio: AudioInput, identity: SessionIdentity) -> None:
+    def append(
+        self,
+        audio: AudioInput,
+        identity: SessionIdentity,
+        *,
+        delivery_id: str | None = None,
+    ) -> None:
         turn = self.current(identity)
-        if turn.stopped:
-            turn.live.fail("audio_after_stop")
-            turn.live.cancelled.set()
-            raise ValueError("Audio arrived after the stop boundary")
-        turn.live.append(audio)
+        with self.lock:
+            if delivery_id is not None:
+                if not re.fullmatch(r"[a-f0-9]{32}", delivery_id):
+                    raise ValueError("Invalid delivery identity")
+                if delivery_id in turn.delivery_ids:
+                    turn.replays_skipped += 1
+                    write_event(
+                        Event(EventName.STREAM_REPLAY_SKIPPED, identity.session_id), sys.stdout
+                    )
+                    return
+            if turn.stopped:
+                turn.live.fail("audio_after_stop")
+                turn.live.cancelled.set()
+                raise ValueError("Audio arrived after the stop boundary")
+            turn.live.append(audio)
+            if delivery_id is not None:
+                turn.delivery_ids.add(delivery_id)
 
     def finish(self, identity: SessionIdentity) -> SavedRecording:
         turn = self.current(identity)
@@ -109,7 +131,13 @@ class AsrSessions:
             turn.live.close()
 
 
-def build_asr_app(sessions: AsrSessions) -> gr.Blocks:
+def asr_app_kwargs(app: "gr.Blocks") -> dict[str, Any]:
+    """Pass at launch: Gradio recreates its FastAPI app when launching."""
+    index = next(i for i, fn in app.fns.items() if fn.fn and fn.fn.__name__ == "append")
+    return {"middleware": [Middleware(AudioDeliveryMiddleware, fn_index=index)]}
+
+
+def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
     import gradio as gr
 
     def begin(identity: SessionIdentity) -> gr.Button:
@@ -121,11 +149,15 @@ def build_asr_app(sessions: AsrSessions) -> gr.Blocks:
             ) from None
         return gr.Button(interactive=False)
 
-    def append(audio: AudioInput | None, identity: SessionIdentity) -> None:
+    def append(audio: AudioInput | None, identity: SessionIdentity, event: gr.EventData) -> None:
         if audio is None:
             return
         try:
-            sessions.append(audio, identity)
+            data = event._data
+            delivery_id = data.get(DELIVERY_FIELD) if isinstance(data, dict) else None
+            if not isinstance(delivery_id, str):
+                raise ValueError("Missing delivery tracking middleware")
+            sessions.append(audio, identity, delivery_id=delivery_id)
         except (ValueError, KeyError):
             raise gr.Error(
                 "Audiostream abgelehnt: Reihenfolge, Format oder Aufnahmelimit prüfen."
@@ -141,6 +173,10 @@ def build_asr_app(sessions: AsrSessions) -> gr.Blocks:
         detail = f"{result.status} · empfangen: {duration:.2f} s"
         if result.error_code:
             detail += f" · {result.error_code} (Audio bitte trotzdem speichern)"
+        with suppress(KeyError):
+            skipped = sessions.current(identity).replays_skipped
+            if skipped:
+                detail += f" · doppelte Zustellungen übersprungen: {skipped}"
         return result.partial, result.text or "", detail
 
     def finish(identity: SessionIdentity) -> tuple[str, dict[str, Any]]:
@@ -276,4 +312,5 @@ def main() -> None:
         show_error=False,
         max_file_size="30mb",
         quiet=True,
+        app_kwargs=asr_app_kwargs(app),
     )

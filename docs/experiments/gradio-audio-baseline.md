@@ -1,8 +1,8 @@
 # Gradio audio baseline
 
-Status: manual capture/save/playback confirmed by the user in the Windows browser
-test. A streaming ASR implementation is available for browser/provider testing;
-automated storage, output-processing and mocked protocol tests pass. TTS, continuous
+Status: manual capture/save/playback and live German ASR with a trailing pause are
+confirmed by the user in the Windows browser test. Immediate stop exposed a duplicate
+tail in both audio and text; its mitigation awaits browser retest. TTS, continuous
 listening and interruption remain unimplemented. Execution tasks live in Beads.
 
 ## Run the initial capture test
@@ -103,7 +103,7 @@ The user subsequently confirmed that saving and replaying recorded audio works.
 The initial microphone-discovery warning is not diagnosed; this confirmation does
 not establish every browser/version, automatic endpointing, or streaming behavior.
 
-## Streaming ASR implementation — pending live verification
+## Streaming ASR implementation
 
 `uv run --env-file .env riva-asr-test` runs a separate native-Gradio streaming UI.
 One backend worker owns each turn's OpenAI WebSocket and serializes audio appends
@@ -127,11 +127,42 @@ discloses this and suggests a short trailing pause. Saved audio is explicitly sc
 to received chunks. Reliable end-of-turn integrity still needs browser measurement;
 do not treat this prototype as lossless microphone capture.
 
-Provider calls are mocked in automated tests. Actual account/model access, partial
-caption latency, chunk ordering on the browser path, final-word integrity and a
-second recording need user verification. No paid API call was used to validate
-this implementation automatically.
+Provider calls are mocked in automated tests. The user confirmed live operation
+with a trailing pause; precise caption latency, chunk ordering, immediate-stop
+integrity and repeated-recording behavior still need measurement. No paid API
+call was used to validate this implementation automatically.
 
 References checked: OpenAI realtime transcription and WebSocket guides:
 https://developers.openai.com/api/docs/guides/realtime-transcription
 https://developers.openai.com/api/docs/guides/voice-websockets?api=realtime
+
+## Stop-signal duplication — delivery-identity mitigation
+
+The user reported that stopping immediately after speech duplicated the last chunk
+in both saved replay and final text. This is audio-path corruption, not merely an
+LLM/transcript formatting issue. Existing recordings are left unchanged.
+
+In installed Gradio 6.30.0, the stream-close route wakes the queue without replacing
+its last `PredictBodyInternal`. `Queue.wait_for_batch` can return that closed stream
+as awake, and the processing loop can invoke the callback with the unchanged body.
+The old append callback treated every invocation as new audio.
+
+A small ASGI middleware now stamps audio HTTP requests at `/queue/join` and
+`/stream/{id}` before Gradio queues them. A close-triggered callback keeps the same
+stamp and is skipped. A genuinely new delivery gets a new stamp even if the waveform
+is identical. The guard therefore preserves intentional repetition and silence;
+it does not compare words, hashes or sample overlap. Stamps are per incoming request,
+not capture timestamps, sequence numbers, authentication tokens or network-retry IDs.
+
+Regression coverage includes the actual Gradio queue-wakeup helper, actual HTTP
+queue/update/close routes with mocked queue admission, real EventData argument
+injection, and session persistence. It verifies two identical new deliveries are
+both kept while reprocessing either delivery does not append it again. Middleware
+is supplied via launch `app_kwargs` because Gradio recreates its FastAPI app at
+launch. New callbacks fail closed if a delivery stamp is missing.
+
+Skipped replays appear as `stream.replay_skipped` events and a count in UI status.
+The unsent-tail issue is separate: this change does not guarantee complete capture
+at an abrupt stop. A no-pause browser retest is still required before claiming the
+observed duplication is resolved on the user's device. Beads: `riva-0jw.10` (fix),
+`riva-0jw.9` (broader transport integrity investigation).
