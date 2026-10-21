@@ -140,6 +140,15 @@ def add_reply_controls(
         identity: SessionIdentity, _metrics: dict[str, Any], now_ms: float
     ) -> tuple[dict[str, Any], str]:
         run = replies.current(identity)
+        write_event(
+            Event(
+                EventName.PLAYBACK_EVENT,
+                identity.session_id,
+                run.saved.metadata.turn_id if run is not None else None,
+                run.generation_id if run is not None else None,
+            ),
+            sys.stdout,
+        )
         if run is None:
             return cast("dict[str, Any]", gr.skip()), cast("str", gr.skip())
         try:
