@@ -316,7 +316,6 @@ if (!window.rivaPlaybackInstalled) {
         app_kwargs=asr_app_kwargs(demo),
         js=playback_js,
         max_file_size="30mb",
-        quiet=True,
         show_error=False,
     )
     print(f"Voice test: http://localhost:{args.port}; OpenAI ASR, LLM and TTS enabled")
