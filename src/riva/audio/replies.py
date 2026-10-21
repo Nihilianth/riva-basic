@@ -430,6 +430,22 @@ class ReplyManager:
         with self.lock:
             return self.runs.get(identity.session_id)
 
+    def find(self, generation_id: str) -> ReplyRun | None:
+        with self.lock:
+            for run in self.runs.values():
+                if run.generation_id == generation_id:
+                    return run
+        return None
+
+    def record_browser_playback(self, generation_id: str, now_ms: float) -> bool:
+        run = self.find(generation_id)
+        if run is None:
+            return False
+        try:
+            return run.record_playback(now_ms)
+        except (OSError, ValueError):
+            return False
+
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:
             run = self.runs.pop(identity.session_id, None)

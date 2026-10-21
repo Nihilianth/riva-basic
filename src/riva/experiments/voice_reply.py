@@ -225,16 +225,101 @@ def main() -> None:
     replies = ReplyManager(
         ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
     )
-    app = build_asr_app(sessions, replies)
-    print(f"Voice test: http://localhost:{args.port}; OpenAI ASR, LLM and TTS enabled")
-    print("Speech API models are deprecated; announced shutdown 2027-01-06 (riva-ddc).")
-    app.queue(max_size=64).launch(
-        server_name="127.0.0.1",
-        server_port=args.port,
-        share=False,
-        inbrowser=False,
-        show_error=False,
+    demo = build_asr_app(sessions, replies)
+    playback_js = r"""
+window.rivaPlaybackInstalled = window.rivaPlaybackInstalled || false;
+if (!window.rivaPlaybackInstalled) {
+  window.rivaPlaybackInstalled = true;
+  window.rivaCurrentGeneration = null;
+  window.rivaGenerationRecorded = false;
+  document.addEventListener('click', (event) => {
+    const button = event.target && event.target.closest ? event.target.closest('button') : null;
+    if (button && button.textContent && button.textContent.includes('Antwort erzeugen')) {
+      window.rivaGenerationRecorded = false;
+      window.rivaCurrentGeneration = null;
+    }
+  }, true);
+  setInterval(() => {
+    if (window.rivaGenerationRecorded) return;
+    const match = document.body.innerText.match(/"generation_id":\s*"([a-f0-9]+)"/);
+    if (match) window.rivaCurrentGeneration = match[1];
+  }, 250);
+  const bindAudio = () => {
+    document.querySelectorAll('audio').forEach((audio) => {
+      if (audio.dataset.rivaPlayBound === '1') return;
+      audio.dataset.rivaPlayBound = '1';
+      audio.addEventListener('play', () => {
+        if (window.rivaGenerationRecorded) return;
+        const generationId = window.rivaCurrentGeneration;
+        if (!generationId) return;
+        window.rivaGenerationRecorded = true;
+        fetch('/riva/playback', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({generation_id: generationId, now_ms: performance.now()})
+        }).catch(() => {});
+      });
+    });
+  };
+  setInterval(bindAudio, 500);
+}
+"""
+    import uvicorn
+    from fastapi import FastAPI, Request
+    from gradio.routes import mount_gradio_app
+
+    demo.queue(max_size=64)
+    api = FastAPI()
+
+    @api.post("/riva/playback")
+    async def record_browser_playback(request: Request) -> dict[str, bool]:
+        try:
+            data = await request.json()
+        except Exception:
+            return {"recorded": False}
+        generation_id = data.get("generation_id") if isinstance(data, dict) else None
+        now_ms = data.get("now_ms") if isinstance(data, dict) else None
+        if not isinstance(generation_id, str):
+            return {"recorded": False}
+        try:
+            now_value = float(now_ms)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return {"recorded": False}
+        recorded = replies.record_browser_playback(generation_id, now_value)
+        run = replies.find(generation_id)
+        if run is not None:
+            write_event(
+                Event(
+                    EventName.PLAYBACK_EVENT,
+                    run.saved.metadata.session_id,
+                    run.saved.metadata.turn_id,
+                    generation_id,
+                ),
+                sys.stdout,
+            )
+            if recorded:
+                write_event(
+                    Event(
+                        EventName.PLAYBACK_STARTED,
+                        run.saved.metadata.session_id,
+                        run.saved.metadata.turn_id,
+                        generation_id,
+                    ),
+                    sys.stdout,
+                )
+        return {"recorded": recorded}
+
+    api = mount_gradio_app(
+        api,
+        demo,
+        path="/",
+        app_kwargs=asr_app_kwargs(demo),
+        js=playback_js,
         max_file_size="30mb",
         quiet=True,
-        app_kwargs=asr_app_kwargs(app),
+        show_error=False,
     )
+    print(f"Voice test: http://localhost:{args.port}; OpenAI ASR, LLM and TTS enabled")
+    print("Speech API models are deprecated; announced shutdown 2027-01-06 (riva-ddc).")
+    print("Browser playback timing uses a JavaScript observer.")
+    uvicorn.run(api, host="127.0.0.1", port=args.port, log_level="warning")
