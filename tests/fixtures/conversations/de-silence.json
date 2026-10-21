@@ -1,0 +1,7 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "silence_only",
+  "events": [{"type": "silence", "duration_ms": 5000}],
+  "expectation": "Do not invent speech or create a journal entry from silence."
+}

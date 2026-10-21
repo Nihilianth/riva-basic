@@ -1,0 +1,36 @@
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "riva"
+version = "0.1.0"
+description = "Development foundation for the Reflective Interactive Voice Assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Nihilianth", email = "nihili4nth@gmail.com" }]
+dependencies = ["gradio>=6,<7", "numpy>=2,<3", "soundfile>=0.13,<1"]
+
+[project.scripts]
+riva-archive-session = "riva.dev.archive_session:main"
+riva-audio-test = "riva.experiments.audio_capture:main"
+
+[dependency-groups]
+dev = ["pre-commit>=4,<5", "pytest>=8,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["live: explicitly enabled tests that contact paid external providers"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]

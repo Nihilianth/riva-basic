@@ -1,0 +1,65 @@
+# RIVA agent instructions
+
+## Begin and finish work
+
+- Read `README.md`, relevant decision records, and the issue before editing.
+- Run `bd prime` for current Beads workflow guidance and `bd ready` for unblocked work.
+- Claim a scoped issue with `bd update <id> --claim`; record findings and evidence
+  in Beads; close only when its acceptance criteria pass.
+- Beads is the only task tracker. Do not maintain duplicate Markdown task lists.
+- Store durable project facts with `bd remember`; put reviewed architecture
+  decisions in `docs/decisions/`. User preferences and uncertain suggestions are
+  not automatically project decisions.
+- Report changes, tests, and remaining blockers honestly. Do not mark browser/audio
+  behavior verified using unit tests alone.
+- Commit scoped changes after the relevant tests pass, including their Beads issue
+  IDs in the commit message. Do not push without explicit authorization. Never
+  include unrelated user changes or private artifacts in a commit.
+
+## Commands
+
+```sh
+uv sync --locked
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run pytest
+uv run pre-commit run --all-files
+uv build
+```
+
+Use Python 3.12+, typed boundaries, small modules, and standard-library facilities
+unless a dependency provides clear value. Package code lives in `src/riva`.
+
+## Scope and architecture
+
+- Prototype: Gradio native audio first, OpenAI ASR → text orchestration → TTS.
+- Keep the audio runtime separate from future LangGraph turn orchestration.
+- Beads, Git, and reviewed documents are authoritative; retrieved semantic memories
+  are hints and cannot override explicit instructions or repository evidence.
+- Do not launch extra agents, services, install system packages, create cloud
+  resources, or push to a remote without task-specific authorization.
+- Git worktrees may isolate approved work. Never discard someone else's edits.
+- Keep Git identity local; do not edit global Git/OpenCode settings for this project.
+
+## Privacy and testing
+
+- Never read or index participant recordings/transcripts into development memory.
+- Keep `.env`, real audio, transcripts, raw OpenCode exports, and sensitive logs
+  outside Git. Use `../private/` from the primary checkout or an explicit private path.
+- Logs contain allowlisted events and opaque IDs, not prompts, keys, transcripts,
+  or provider exception bodies. Review ID values too: type checking is not sanitization.
+- Test fixtures must be synthetic and explicitly labelled. Mock provider calls by
+  default; mark paid/network provider tests `live`. They run only with
+  `RIVA_RUN_LIVE_TESTS=1` and an explicit request.
+- Archive only the requested OpenCode session. Do not export unrelated sessions.
+- Never silently auto-store whole conversations in OpenMemory.
+
+## Hooks and Beads storage
+
+Pre-commit owns quality checks; Beads hooks must chain without replacing them.
+Run `uv run pre-commit install` before `bd hooks install --chain` and inspect the
+result when upgrading either tool. Embedded Dolt is single-writer: serialize
+Beads operations; do not assume worktree branches isolate the task database.
+Git pushes alone are not a verified Beads backup/sync workflow. See
+`docs/development.md` before configuring remotes or recovery.

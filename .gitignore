@@ -1,7 +1,43 @@
+# Python and tools
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Beads / Dolt files (added by bd init)
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private development and research artifacts (also keep outside this repository)
+/private/
+/data/
+/recordings/
+/transcripts/
+/logs/
+/agent-sessions/
+/openmemory-data/
+*.log
+
+# Local editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Beads / Dolt local state (preserve bd init exclusions)
 .dolt/
 *.db
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+.beads/dolt-backup.json
+.beads/dolt-backup-state.json

@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "long_pause",
+  "events": [
+    {"type": "transcript.partial", "text": "Ich war heute im Park"},
+    {"type": "silence", "duration_ms": 2500},
+    {"type": "transcript.final", "text": "Ich war heute im Park und habe einen Freund getroffen."}
+  ],
+  "expectation": "With manual completion, silence alone must not commit the turn."
+}

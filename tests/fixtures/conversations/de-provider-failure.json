@@ -1,0 +1,10 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "provider_failure",
+  "events": [
+    {"type": "transcript.final", "text": "Heute habe ich gekocht."},
+    {"type": "provider.failed", "component": "tts", "code": "timeout"}
+  ],
+  "expectation": "Retain the user turn, expose a retry control, and never log provider exception bodies."
+}

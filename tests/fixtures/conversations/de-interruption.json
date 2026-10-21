@@ -1,0 +1,13 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "interruption",
+  "events": [
+    {"type": "playback.started", "generation_id": "synthetic-old"},
+    {"type": "user.speech_started"},
+    {"type": "playback.stopped", "generation_id": "synthetic-old"},
+    {"type": "audio.chunk", "generation_id": "synthetic-old"},
+    {"type": "transcript.final", "text": "Nein, ich möchte etwas anderes erzählen."}
+  ],
+  "expectation": "Discard late audio from the cancelled generation; do not resume playback."
+}
