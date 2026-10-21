@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "riva",
+  "project_id": "a54071a7-3596-4a27-aa7d-f1057f489855"
+}
