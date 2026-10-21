@@ -13,6 +13,8 @@ class EventName(StrEnum):
     STREAM_REPLAY_SKIPPED = "stream.replay_skipped"
     ASR_FINALIZED = "asr.finalized"
     RESPONSE_STARTED = "response.started"
+    RESPONSE_COMPLETED = "response.completed"
+    RESPONSE_FAILED = "response.failed"
     PLAYBACK_STOPPED = "playback.stopped"
     PROVIDER_FAILED = "provider.failed"
 

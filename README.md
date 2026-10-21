@@ -1,8 +1,47 @@
 # RIVA
 
 Reflective Interactive Voice Assistant: an architecture prototype for accessible,
-personalized German-language journaling. Local capture and German streaming ASR
-experiments are available; orchestration and TTS are not implemented yet.
+personalized German-language journaling. Local capture, German streaming ASR, and
+a short streamed text-reply/TTS baseline are available. Stateful conversation
+orchestration, memory, continuous listening, and interruption are not implemented yet.
+
+## Try the complete manual voice baseline
+
+```sh
+uv sync --locked
+uv run --env-file .env riva-voice-test
+```
+
+Open **http://localhost:7861**. Record in German, leave the trailing pause, stop,
+and select **Abschließen & speichern**. Review the final transcript, then select
+**Antwort erzeugen**. A short German response is generated as text and spoken by
+an **AI-generated voice**. If autoplay is blocked, use the audio player's Play control.
+Wait until the spoken response finishes before recording again.
+
+Recording sends audio to OpenAI; the reply button additionally sends the final text
+to OpenAI and incurs LLM/TTS costs. No reply is generated from provisional, failed,
+or empty ASR. Double-clicking a completed turn does not start another paid generation.
+Replies use only the current turn: there is no conversation history or personalization.
+
+Default models are `gpt-4.1-mini` and `gpt-4o-mini-tts`, voice `coral`. Override with
+`--llm-model`, `--tts-model`, `--voice`, or the optional environment variables in
+`.env.example`. Your existing `.env` is not changed. **The dedicated Speech API TTS
+models are deprecated with announced shutdown January 6, 2027.** The prototype keeps
+the provider replaceable; migration is tracked in `riva-ddc`. Do not pass a Realtime
+model to the Speech API or assume it can be swapped by model name alone.
+
+Audio and transcripts go under `../private/research-data/voice-test/`. Each reply
+gets a private `replies/<generation-id>/` directory with `reply.txt`, `reply.json`,
+and any synthesized `speech.wav`. Generated text/audio are not an approved journal
+entry and are not proof of what the user heard. Failed/partial replies are labelled
+in JSON; no automatic retries are performed.
+
+The developer panel reports server first-text and first-audio times, plus the
+browser's first Play event relative to the reply-button request. The latter is a
+**playback-start proxy, not measured acoustic audibility**, and excludes earlier ASR
+and manual review time. See [voice baseline details](docs/experiments/voice-response-baseline.md).
+
+This is a local, unauthenticated technical test. Do not use participant data yet.
 
 ## Try streaming German transcription
 
@@ -133,7 +172,8 @@ targets alone do not require splitting the application repository.
 - **Tasks:** Beads; start with `bd prime` and `bd ready`.
 - **Accepted decisions:** [decision records](docs/decisions/0001-development-foundation.md).
 - **Requirements and discussion:** [initial protocol](docs/discussions/2026-10-21-project-foundation.md).
-- **Current experiment:** [Gradio audio baseline](docs/experiments/gradio-audio-baseline.md).
+- **Current experiments:** [Gradio audio baseline](docs/experiments/gradio-audio-baseline.md)
+  and [voice response baseline](docs/experiments/voice-response-baseline.md).
 - **Raw OpenCode sessions:** private exports, not committed; see [archiving](docs/development.md#session-archives).
 - **OpenMemory:** optional local development memory; not installed or connected yet.
   See [memory boundaries](docs/development-memory.md).

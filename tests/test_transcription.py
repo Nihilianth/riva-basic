@@ -456,3 +456,104 @@ def test_real_gradio_routes_preserve_delivery_identity_on_stream_close(
         assert sessions.finish(identity).metadata.duration_seconds == 1
     finally:
         sessions.release(identity)
+
+
+def test_voice_ui_chains_only_saved_final_transcripts_and_reports_playback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager, TextPart
+
+    class Provider:
+        calls = 0
+
+        def text(self, transcript, config):
+            self.calls += 1
+            assert transcript == "Heute war ich im Park."
+            yield TextPart("delta", "Wie war es dort?")
+            yield TextPart("completed", "Wie war es dort?")
+
+        def speech(self, phrase, config):
+            yield b"\0\0" * 12000
+
+    provider = Provider()
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    replies = ReplyManager(ReplyConfig(), lambda: provider)
+    identity = new_development_session()
+    app = build_asr_app(sessions, replies)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        assert provider.calls == 0
+        sessions.begin(identity)
+        sessions.append(audio(), identity)
+        sessions.current(identity).stopped = True
+        sessions.finish(identity)
+        assert handlers["enable"](identity).interactive
+        outputs = list(handlers["reply"](identity, 100))
+        assert outputs[-1][0] == "Wie war es dort?"
+        assert outputs[-1][2]["status"] == "completed"
+        wav_chunks = [v[1] for v in outputs if isinstance(v[1], bytes)]
+        assert wav_chunks
+        # Verify Gradio accepts our independent WAV frames and can encode/flush
+        # them through its real streaming output path. This is not a browser test.
+        import asyncio
+
+        speech = next(c for c in app.blocks.values() if getattr(c, "label", None) == "KI-Stimme")
+
+        async def encode():
+            chunks = []
+            for i, wav in enumerate(wav_chunks):
+                chunk, _ = await speech.stream_output(wav, "synthetic-voice-test", i == 0)
+                if chunk:
+                    chunks.append(chunk)
+            flushed = await speech.flush_stream_output("synthetic-voice-test")
+            if flushed:
+                chunks.append(flushed)
+            return chunks
+
+        assert asyncio.run(encode())
+        metrics = outputs[-1][2]
+        import gradio as gr
+
+        assert handlers["played"](identity, {"generation_id": "stale"}, 200) == gr.skip()
+        assert handlers["played"](identity, metrics, 300)["first_browser_play_event_ms"] == 200
+        list(handlers["reply"](identity, 500))
+        assert provider.calls == 1
+    finally:
+        replies.release(identity)
+        sessions.release(identity)
+
+
+def test_failed_asr_never_starts_reply_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    import gradio as gr
+
+    from riva.audio.replies import ReplyConfig, ReplyManager
+
+    def forbidden():
+        pytest.fail("Failed ASR must not trigger an LLM/TTS request")
+
+    sessions = AsrSessions(
+        RecordingStore(tmp_path / "archive"), AsrConfig(), lambda: FakeWire(error=True)
+    )
+    replies = ReplyManager(ReplyConfig(), forbidden)
+    identity = new_development_session()
+    app = build_asr_app(sessions, replies)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        sessions.begin(identity)
+        sessions.append(audio(), identity)
+        assert sessions.current(identity).live.done.wait(2)
+        sessions.current(identity).stopped = True
+        sessions.finish(identity)
+        assert not handlers["enable"](identity).interactive
+        with pytest.raises(gr.Error):
+            list(handlers["reply"](identity, 0))
+    finally:
+        replies.release(identity)
+        sessions.release(identity)

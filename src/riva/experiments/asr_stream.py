@@ -20,6 +20,7 @@ from riva.audio.recordings import (
     SessionIdentity,
     new_development_session,
 )
+from riva.audio.replies import ReplyManager
 from riva.audio.transcription import AsrConfig, LiveTurn, Transcript, Wire, connect_openai
 from riva.audio.transcripts import save_transcript
 from riva.event_log import Event, EventName, write_event
@@ -137,10 +138,14 @@ def asr_app_kwargs(app: "gr.Blocks") -> dict[str, Any]:
     return {"middleware": [Middleware(AudioDeliveryMiddleware, fn_index=index)]}
 
 
-def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
+def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) -> "gr.Blocks":
     import gradio as gr
 
     def begin(identity: SessionIdentity) -> gr.Button:
+        if replies is not None:
+            run = replies.current(identity)
+            if run is not None and not run.done.is_set():
+                raise gr.Error("Bitte warten, bis die Antwort erzeugt wurde.")
         try:
             sessions.begin(identity)
         except ValueError:
@@ -195,8 +200,13 @@ def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
         return cached, {**asdict(saved.metadata), "transcription_status": result.status}
 
     def discard(identity: SessionIdentity) -> tuple[gr.Audio, gr.Button]:
-        sessions.release(identity)
+        release(identity)
         return gr.Audio(value=None, recording=False), gr.Button(interactive=False)
+
+    def release(identity: SessionIdentity) -> None:
+        sessions.release(identity)
+        if replies is not None:
+            replies.release(identity)
 
     app = gr.Blocks(analytics_enabled=False, delete_cache=(300, 3600))
     with app:
@@ -211,7 +221,7 @@ def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
             "Keine Wort-Zeitstempel/SRT, keine automatische Gesprächsantwort."
         )
         identity = gr.State(
-            value=new_development_session, time_to_live=600, delete_callback=sessions.release
+            value=new_development_session, time_to_live=600, delete_callback=release
         )
         microphone = gr.Audio(
             sources=["microphone"],
@@ -256,7 +266,7 @@ def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
             concurrency_limit=1,
             api_visibility="private",
         )
-        finish_button.click(
+        finish_event = finish_button.click(
             finish,
             inputs=[identity],
             outputs=[playback, details],
@@ -279,6 +289,10 @@ def build_asr_app(sessions: AsrSessions) -> "gr.Blocks":
             concurrency_limit=1,
             api_visibility="private",
         )
+        if replies is not None:
+            from riva.experiments.voice_reply import add_reply_controls
+
+            add_reply_controls(sessions, replies, identity, finish_event)
     return app
 
 
