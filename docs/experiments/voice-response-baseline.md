@@ -60,9 +60,9 @@ contain the generation ID. A delayed Play from a previous turn's still-visible
 player could therefore be attributed to the current run; treat the value as a
 proxy and verify first-audible latency separately.
 An absent Play event remains null; replay/resume does not overwrite the first event.
-If the browser play signal arrives but its timestamp is unusable, the server
-records a fallback server-received play time instead, so the panel is not empty.
-That fallback is a server-received proxy, not a browser timestamp.
+The JavaScript observer is retained for diagnostics, but Gradio streamed audio did
+not emit a usable browser play signal in the tested browsers; the browser field
+may remain null. Use `first_server_audio_ms` plus manual timing for latency decisions.
 The Play event is only a proxy: a muted device, stalled buffer or hardware latency
 means it is not proof of first audible sound. Measure audible latency separately.
 
