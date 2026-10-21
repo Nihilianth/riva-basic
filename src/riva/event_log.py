@@ -15,6 +15,7 @@ class EventName(StrEnum):
     RESPONSE_STARTED = "response.started"
     RESPONSE_COMPLETED = "response.completed"
     RESPONSE_FAILED = "response.failed"
+    PLAYBACK_FALLBACK = "playback.fallback"
     PLAYBACK_EVENT = "playback.event"
     PLAYBACK_STARTED = "playback.started"
     PLAYBACK_STOPPED = "playback.stopped"

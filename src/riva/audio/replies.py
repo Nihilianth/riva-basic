@@ -186,6 +186,8 @@ class ReplyRun:
         self.first_text_ms: float | None = None
         self.first_audio_ms: float | None = None
         self.first_playback_ms: float | None = None
+        self.playback_signal_received: bool = False
+        self.playback_signal_ms: float | None = None
         self.producer = threading.Thread(target=self._text, args=(transcript,), daemon=True)
         self.synthesizer = threading.Thread(target=self._speech, daemon=True)
         self.producer.start()
@@ -362,9 +364,22 @@ class ReplyRun:
         self.persist()
         return True
 
+    def note_playback_signal(self) -> None:
+        with self.lock:
+            if self.first_playback_ms is None:
+                self.playback_signal_received = True
+                self.playback_signal_ms = (time.monotonic() - self.started) * 1000
+
     def persist(self) -> None:
         with self.persist_lock:
             with self.lock:
+                if (
+                    self.first_playback_ms is None
+                    and self.playback_signal_received
+                    and self.pcm
+                    and self.playback_signal_ms is not None
+                ):
+                    self.first_playback_ms = self.playback_signal_ms
                 text, pcm = self.text, bytes(self.pcm)
                 record = {
                     **self.snapshot(),
@@ -445,6 +460,11 @@ class ReplyManager:
             return run.record_playback(now_ms)
         except (OSError, ValueError):
             return False
+
+    def note_playback_signal(self, generation_id: str) -> None:
+        run = self.find(generation_id)
+        if run is not None:
+            run.note_playback_signal()
 
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:

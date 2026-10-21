@@ -286,6 +286,7 @@ if (!window.rivaPlaybackInstalled) {
         except (TypeError, ValueError):
             return {"recorded": False}
         recorded = replies.record_browser_playback(generation_id, now_value)
+        replies.note_playback_signal(generation_id)
         run = replies.find(generation_id)
         if run is not None:
             write_event(
@@ -301,6 +302,16 @@ if (!window.rivaPlaybackInstalled) {
                 write_event(
                     Event(
                         EventName.PLAYBACK_STARTED,
+                        run.saved.metadata.session_id,
+                        run.saved.metadata.turn_id,
+                        generation_id,
+                    ),
+                    sys.stdout,
+                )
+            elif run.playback_signal_received:
+                write_event(
+                    Event(
+                        EventName.PLAYBACK_FALLBACK,
                         run.saved.metadata.session_id,
                         run.saved.metadata.turn_id,
                         generation_id,
