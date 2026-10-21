@@ -1,9 +1,9 @@
 # Gradio audio baseline
 
 Status: manual capture/save/playback confirmed by the user in the Windows browser
-test. Automated storage, output-processing and routing tests pass. Streaming ASR,
-TTS, continuous listening and interruption remain unimplemented. Execution tasks
-live in Beads, not in this document.
+test. A streaming ASR implementation is available for browser/provider testing;
+automated storage, output-processing and mocked protocol tests pass. TTS, continuous
+listening and interruption remain unimplemented. Execution tasks live in Beads.
 
 ## Run the initial capture test
 
@@ -102,3 +102,36 @@ test verifies that the original survives cache-write errors.
 The user subsequently confirmed that saving and replaying recorded audio works.
 The initial microphone-discovery warning is not diagnosed; this confirmation does
 not establish every browser/version, automatic endpointing, or streaming behavior.
+
+## Streaming ASR implementation — pending live verification
+
+`uv run --env-file .env riva-asr-test` runs a separate native-Gradio streaming UI.
+One backend worker owns each turn's OpenAI WebSocket and serializes audio appends
+and explicit commit. Audio conversion is mono, no peak normalization, stateful
+libsoxr resampling to 24 kHz PCM16. Input queues are bounded; overflow/invalid chunks
+fail the transcript rather than silently producing a truncated successful result.
+
+Partial text and authoritative completion are separate. Item IDs prevent an
+unrelated completion event from finalizing a turn. Final timeout, provider failure
+and disconnect/idle handling use fixed error codes without logging raw errors or
+transcript content. The UI polls snapshots independently of the audio queue.
+
+The Finish action saves received audio first, then TXT/final JSON on success or
+failed JSON with any partial text on failure. Archives remain private; only playback
+copies enter the managed cache. Model-provided timestamps are unavailable and no
+SRT is fabricated. `saved_at` means filesystem save time, not speech timing.
+
+Important browser transport finding: the upstream Gradio streaming recorder can
+skip a final chunk still being encoded/uploaded when stop is pressed. The UI
+discloses this and suggests a short trailing pause. Saved audio is explicitly scoped
+to received chunks. Reliable end-of-turn integrity still needs browser measurement;
+do not treat this prototype as lossless microphone capture.
+
+Provider calls are mocked in automated tests. Actual account/model access, partial
+caption latency, chunk ordering on the browser path, final-word integrity and a
+second recording need user verification. No paid API call was used to validate
+this implementation automatically.
+
+References checked: OpenAI realtime transcription and WebSocket guides:
+https://developers.openai.com/api/docs/guides/realtime-transcription
+https://developers.openai.com/api/docs/guides/voice-websockets?api=realtime

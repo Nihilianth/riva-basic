@@ -1,8 +1,46 @@
 # RIVA
 
 Reflective Interactive Voice Assistant: an architecture prototype for accessible,
-personalized German-language journaling. The first **local microphone capture
-experiment** is available; ASR, orchestration and TTS are not implemented yet.
+personalized German-language journaling. Local capture and German streaming ASR
+experiments are available; orchestration and TTS are not implemented yet.
+
+## Try streaming German transcription
+
+Set `OPENAI_API_KEY` in the ignored `.env` file, then run:
+
+```sh
+uv sync --locked
+uv run --env-file .env riva-asr-test
+```
+
+Open **http://localhost:7860** in Windows Chrome/Edge. Unlike the capture-only test,
+**this sends microphone audio to OpenAI while recording and incurs API costs**.
+Starting/visiting the UI alone does not connect to OpenAI.
+
+Record a short German sentence, leave a short pause after the last word, stop the
+microphone, and click **Abschließen & speichern**. Provisional text appears while
+recording; final text appears after explicit commit. Audio + `transcript.txt` +
+`transcript.json` + metadata are saved under `../private/research-data/asr-test/`.
+Failed transcriptions preserve the received audio and a failed JSON record, never
+mislabel partial text as final. Use the discard button only if you want to discard
+the current unsaved input. Refreshing/disconnecting does not automatically save it.
+
+**Known transport limitation:** native Gradio streaming may discard the last unsent
+chunk on stop. The archive contains the received mono stream, not a guaranteed
+complete browser recording. Compare the replay with what you said during testing.
+There are no trustworthy word timestamps or SRT exports in this step.
+
+Default model: `gpt-live-transcribe`, German hint, low transcription delay, one
+WebSocket connection per turn, stateful resampling to mono PCM16 at 24 kHz. Model
+access depends on your OpenAI project. `--model gpt-transcribe` is an alternative
+that starts transcription after commit rather than providing live captions.
+`--delay minimal` can be evaluated for the live model; measure accuracy as well as
+latency. No automatic retries or silent model fallback are performed.
+
+Only manual turn completion is currently supported. Continuous listening,
+endpointing, assistant replies and interruption are later tasks. Provider activity
+expires after 20 seconds without new audio; a turn is limited to 120 seconds.
+This remains a loopback-only, unauthenticated development tool, not a participant app.
 
 ## Try the microphone experiment
 

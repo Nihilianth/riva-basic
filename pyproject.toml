@@ -9,11 +9,15 @@ description = "Development foundation for the Reflective Interactive Voice Assis
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Nihilianth", email = "nihili4nth@gmail.com" }]
-dependencies = ["gradio>=6,<7", "numpy>=2,<3", "soundfile>=0.13,<1"]
+dependencies = [
+    "gradio>=6,<7", "numpy>=2,<3", "soundfile>=0.13,<1",
+    "websockets>=15,<17", "soxr>=1,<2",
+]
 
 [project.scripts]
 riva-archive-session = "riva.dev.archive_session:main"
 riva-audio-test = "riva.experiments.audio_capture:main"
+riva-asr-test = "riva.experiments.asr_stream:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4,<5", "pytest>=8,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
