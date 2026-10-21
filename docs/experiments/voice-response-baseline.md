@@ -53,7 +53,12 @@ requests. A new turn creates a new generation; there is no silent retry/fallback
   It includes request/queue/delivery buffering but not earlier ASR/manual review.
 
 Browser timestamps come from `performance.now()` on the same page, not from mixing
-wall-clock/server/client clocks. Generation-ID validation rejects stale Play reports.
+wall-clock/server/client clocks. A Play event is attributed to the session's
+current reply generation and only the first event is stored. The event can arrive
+before the JSON panel update, so the handler does not require the panel to already
+contain the generation ID. A delayed Play from a previous turn's still-visible
+player could therefore be attributed to the current run; treat the value as a
+proxy and verify first-audible latency separately.
 An absent Play event remains null; replay/resume does not overwrite the first event.
 The Play event is only a proxy: a muted device, stalled buffer or hardware latency
 means it is not proof of first audible sound. Measure audible latency separately.

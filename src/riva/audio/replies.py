@@ -351,15 +351,16 @@ class ReplyRun:
             if not self.done.is_set():
                 self.close()
 
-    def record_playback(self, now_ms: float) -> None:
+    def record_playback(self, now_ms: float) -> bool:
         elapsed = now_ms - self.client_started_ms
         if not math.isfinite(elapsed) or not 0 <= elapsed <= 180000:
-            return
+            return False
         with self.lock:
             if self.first_playback_ms is not None or not self.pcm:
-                return
+                return False
             self.first_playback_ms = elapsed
         self.persist()
+        return True
 
     def persist(self) -> None:
         with self.persist_lock:

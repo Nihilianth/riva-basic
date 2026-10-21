@@ -20,6 +20,57 @@ if TYPE_CHECKING:
     import gradio as gr
     from gradio.events import Dependency
 
+STATUS_LABELS = {
+    "generating": "läuft",
+    "completed": "abgeschlossen",
+    "failed": "fehlgeschlagen",
+    "cancelled": "abgebrochen",
+}
+
+
+def _milliseconds(metrics: dict[str, object], key: str) -> float | None:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def format_metrics(metrics: dict[str, object]) -> str:
+    """Human-readable latency panel; raw values remain in the JSON component."""
+    status = metrics.get("status")
+    status_label = (
+        STATUS_LABELS.get(status, "unbekannt") if isinstance(status, str) else "unbekannt"
+    )
+    lines = [f"**Status:** {status_label}"]
+    error = metrics.get("error_code")
+    if isinstance(error, str) and error:
+        lines.append(f"**Fehlercode:** `{error}`")
+    text = _milliseconds(metrics, "first_text_ms")
+    audio = _milliseconds(metrics, "first_server_audio_ms")
+    playback = _milliseconds(metrics, "first_browser_play_event_ms")
+    lines.append(f"- Erster Text: {text / 1000:.2f} s" if text is not None else "- Erster Text: –")
+    lines.append(
+        f"- Erstes Server-Audio: {audio / 1000:.2f} s"
+        if audio is not None
+        else "- Erstes Server-Audio: –"
+    )
+    if text is not None and audio is not None:
+        lines.append(f"- Text bis Audio: {(audio - text) / 1000:.2f} s")
+    lines.append(
+        f"- Wiedergabe im Browser: {playback / 1000:.2f} s"
+        if playback is not None
+        else "- Wiedergabe im Browser: –"
+    )
+    produced = _milliseconds(metrics, "audio_seconds_produced")
+    if produced is not None:
+        lines.append(f"- Erzeugte Audiodauer: {produced:.2f} s")
+    lines.append("")
+    lines.append(
+        "*Serverwerte ab Antwortstart, Browserwert ab Klick. "
+        "Wiedergabe ist ein Proxy, keine gemessene Hörbarkeit.*"
+    )
+    return "\n".join(lines)
+
 
 def add_reply_controls(
     sessions: AsrSessions,
@@ -37,7 +88,7 @@ def add_reply_controls(
 
     def reply(
         identity: SessionIdentity, client_started_ms: float
-    ) -> Iterator[tuple[Any, Any, Any]]:
+    ) -> Iterator[tuple[Any, Any, Any, str]]:
         try:
             turn = sessions.current(identity)
             if turn is None:
@@ -56,7 +107,8 @@ def add_reply_controls(
                 "Bitte zuerst eine gültige Transkription abschließen und speichern."
             ) from None
         if not created:
-            yield run.text, gr.skip(), run.snapshot()
+            snapshot = run.snapshot()
+            yield run.text, gr.skip(), snapshot, format_metrics(snapshot)
             return
         write_event(
             Event(
@@ -67,9 +119,15 @@ def add_reply_controls(
             ),
             sys.stdout,
         )
-        yield "", None, run.snapshot()
+        initial = run.snapshot()
+        yield "", None, initial, format_metrics(initial)
         for text, wav, metrics in run.updates():
-            yield text, wav if wav is not None else gr.skip(), metrics
+            yield (
+                text,
+                wav if wav is not None else gr.skip(),
+                metrics,
+                format_metrics(metrics),
+            )
         name = (
             EventName.RESPONSE_COMPLETED if run.status == "completed" else EventName.RESPONSE_FAILED
         )
@@ -78,17 +136,30 @@ def add_reply_controls(
             sys.stdout,
         )
 
-    def played(identity: SessionIdentity, metrics: dict[str, Any], now_ms: float) -> dict[str, Any]:
-        if not isinstance(metrics, dict):
-            return {}
+    def played(
+        identity: SessionIdentity, _metrics: dict[str, Any], now_ms: float
+    ) -> tuple[dict[str, Any], str]:
         run = replies.current(identity)
-        if run is None or metrics.get("generation_id") != run.generation_id:
-            return cast("dict[str, Any]", gr.skip())
+        if run is None:
+            return cast("dict[str, Any]", gr.skip()), cast("str", gr.skip())
         try:
-            run.record_playback(now_ms)
+            recorded = run.record_playback(now_ms)
         except OSError:
-            return {**run.snapshot(), "metrics_storage_error": True}
-        return run.snapshot()
+            metrics = {**run.snapshot(), "metrics_storage_error": True}
+            return metrics, format_metrics(metrics)
+        snapshot = run.snapshot()
+        if not recorded:
+            return snapshot, format_metrics(snapshot)
+        write_event(
+            Event(
+                EventName.PLAYBACK_STARTED,
+                identity.session_id,
+                run.saved.metadata.turn_id,
+                run.generation_id,
+            ),
+            sys.stdout,
+        )
+        return snapshot, format_metrics(snapshot)
 
     gr.Markdown(
         "## Kurze KI-Antwort\n"
@@ -106,11 +177,12 @@ def add_reply_controls(
         label="KI-Stimme", streaming=True, autoplay=True, interactive=False, buttons=[]
     )
     metrics = gr.JSON(label="Antwortstatus und Latenz (ms)")
+    latency = gr.Markdown(value="Noch keine Antwort erzeugt.", label="Latenz (lesbar)")
     finish_event.success(enable, inputs=[identity], outputs=[button], api_visibility="private")
     button.click(
         reply,
         inputs=[identity, clock],
-        outputs=[text, speech, metrics],
+        outputs=[text, speech, metrics, latency],
         js="(identity, _) => [identity, performance.now()]",
         concurrency_limit=1,
         api_visibility="private",
@@ -118,7 +190,7 @@ def add_reply_controls(
     speech.play(
         played,
         inputs=[identity, metrics, clock],
-        outputs=[metrics],
+        outputs=[metrics, latency],
         js="(identity, metrics, _) => [identity, metrics, performance.now()]",
         queue=False,
         api_visibility="private",

@@ -135,8 +135,8 @@ def test_browser_play_metric_is_distinct_from_server_audio_and_persists(tmp_path
         list(run.updates())
         run.record_playback(float("nan"))
         assert run.first_playback_ms is None
-        run.record_playback(350)
-        run.record_playback(900)
+        assert run.record_playback(350) is True
+        assert run.record_playback(900) is False
         assert run.first_playback_ms == 250
         data = json.loads((run.root / "reply.json").read_text())
         assert data["first_browser_play_event_ms"] == 250
@@ -197,6 +197,33 @@ def test_phrase_buffer_bounds_punctuation_free_output():
 def test_pcm_wav_rejects_incomplete_samples():
     with pytest.raises(ValueError):
         pcm_wav(b"x")
+
+
+def test_format_metrics_renders_latency_and_error_without_free_text():
+    from riva.experiments.voice_reply import format_metrics
+
+    text = format_metrics(
+        {
+            "status": "completed",
+            "first_text_ms": 1578.0,
+            "first_server_audio_ms": 3088.5,
+            "first_browser_play_event_ms": 2000.0,
+            "audio_seconds_produced": 8.85,
+        }
+    )
+    assert "**Status:** abgeschlossen" in text
+    assert "Erster Text: 1.58 s" in text
+    assert "Erstes Server-Audio: 3.09 s" in text
+    assert "Text bis Audio: 1.51 s" in text
+    assert "Wiedergabe im Browser: 2.00 s" in text
+    assert "Erzeugte Audiodauer: 8.85 s" in text
+    assert "Fehlercode" not in text
+    assert "synthetic" not in text.lower()
+
+    failed = format_metrics({"status": "failed", "error_code": "tts_failed"})
+    assert "**Status:** fehlgeschlagen" in failed
+    assert "**Fehlercode:** `tts_failed`" in failed
+    assert "Erster Text: –" in failed
 
 
 def test_provider_adapters_use_streaming_no_storage_and_pcm_without_network(monkeypatch):

@@ -461,6 +461,7 @@ def test_real_gradio_routes_preserve_delivery_identity_on_stream_close(
 def test_voice_ui_chains_only_saved_final_transcripts_and_reports_playback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
     monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
@@ -494,7 +495,9 @@ def test_voice_ui_chains_only_saved_final_transcripts_and_reports_playback(
         outputs = list(handlers["reply"](identity, 100))
         assert outputs[-1][0] == "Wie war es dort?"
         assert outputs[-1][2]["status"] == "completed"
+        assert "abgeschlossen" in outputs[-1][3]
         wav_chunks = [v[1] for v in outputs if isinstance(v[1], bytes)]
+        assert wav_chunks
         assert wav_chunks
         # Verify Gradio accepts our independent WAV frames and can encode/flush
         # them through its real streaming output path. This is not a browser test.
@@ -515,10 +518,12 @@ def test_voice_ui_chains_only_saved_final_transcripts_and_reports_playback(
 
         assert asyncio.run(encode())
         metrics = outputs[-1][2]
-        import gradio as gr
-
-        assert handlers["played"](identity, {"generation_id": "stale"}, 200) == gr.skip()
-        assert handlers["played"](identity, metrics, 300)["first_browser_play_event_ms"] == 200
+        assert metrics["first_browser_play_event_ms"] is None
+        play_result = handlers["played"](identity, {}, 300)
+        assert play_result[0]["first_browser_play_event_ms"] == 200
+        assert "Wiedergabe" in play_result[1]
+        play_result = handlers["played"](identity, {"generation_id": "stale"}, 500)
+        assert play_result[0]["first_browser_play_event_ms"] == 200
         list(handlers["reply"](identity, 500))
         assert provider.calls == 1
     finally:
