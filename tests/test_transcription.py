@@ -625,6 +625,7 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
             "asr.commit_sent",
             "asr.completed",
         } <= stages
+        assert sessions.get_vad_diagnostics(identity) == updates[-1][8]
     finally:
         sessions.release(identity)
 

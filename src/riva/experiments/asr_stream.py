@@ -56,6 +56,17 @@ class AsrSessions:
         self.store, self.config, self.factory = store, config, factory
         self.lock = threading.RLock()
         self.turns: dict[str, SessionTurn] = {}
+        self.vad_diagnostics: dict[str, list[dict[str, Any]]] = {}
+
+    def update_vad_diagnostics(
+        self, identity: SessionIdentity, events: list[dict[str, Any]]
+    ) -> None:
+        with self.lock:
+            self.vad_diagnostics[identity.session_id] = [dict(event) for event in events]
+
+    def get_vad_diagnostics(self, identity: SessionIdentity) -> list[dict[str, Any]]:
+        with self.lock:
+            return [dict(event) for event in self.vad_diagnostics.get(identity.session_id, [])]
 
     def begin(self, identity: SessionIdentity) -> None:
         with self.lock:
@@ -133,6 +144,7 @@ class AsrSessions:
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:
             turn = self.turns.pop(identity.session_id, None)
+            self.vad_diagnostics.pop(identity.session_id, None)
         if turn is not None:
             turn.live.close()
 
@@ -154,6 +166,7 @@ def vad_segment_updates(
     """Persist and transcribe one browser-VAD-owned 16 kHz PCM16 segment."""
     handler_started = time.monotonic()
     timeline: list[dict[str, Any]] = []
+    sessions.update_vad_diagnostics(identity, timeline)
 
     def record(stage: str, source: str = "server", elapsed_ms: float | None = None) -> None:
         timeline.append(
@@ -165,6 +178,7 @@ def vad_segment_updates(
                 else round((time.monotonic() - handler_started) * 1000, 1),
             }
         )
+        sessions.update_vad_diagnostics(identity, timeline)
 
     def update(
         partial: str = "",
@@ -654,6 +668,18 @@ def build_vad_app(
         if replies is not None:
             replies.release(identity)
 
+    def poll_vad(identity: SessionIdentity) -> tuple[str, str, str, list[dict[str, Any]]]:
+        result, duration = sessions.snapshot(identity)
+        detail = f"{result.status} · empfangen: {duration:.2f} s"
+        if result.error_code:
+            detail += f" · {result.error_code}"
+        return (
+            result.partial,
+            result.text or "",
+            detail,
+            sessions.get_vad_diagnostics(identity),
+        )
+
     app = gr.Blocks(analytics_enabled=False, delete_cache=(300, 3600))
     with app:
         gr.Markdown(
@@ -687,6 +713,7 @@ def build_vad_app(
         )
         reply_metrics = gr.JSON(label="Antwortstatus", visible=replies is not None)
         reply_latency = gr.Markdown(visible=replies is not None)
+        diagnostic_timer = gr.Timer(0.25)
         if test_mode:
             gr.Markdown(
                 "**Synthetic test mode:** this uses a generated tone and mocked ASR/LLM/TTS; "
@@ -757,6 +784,13 @@ def build_vad_app(
             inputs=[enabled],
             outputs=[],
             js=VAD_BROWSER_JS,
+            queue=False,
+            api_visibility="private",
+        )
+        diagnostic_timer.tick(
+            poll_vad,
+            inputs=[identity],
+            outputs=[partial, final, status, diagnostics],
             queue=False,
             api_visibility="private",
         )
