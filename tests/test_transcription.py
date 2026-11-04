@@ -851,3 +851,24 @@ def test_voice_ui_stop_button_cancels_playback_and_resets_controls(
     finally:
         replies.release(identity)
         sessions.release(identity)
+
+
+def test_vad_generator_events_are_queued_so_all_updates_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gradio returns only the first yield of a non-queued generator event."""
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager
+    from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), SyntheticWire)
+    replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    app = build_vad_app(sessions, replies, test_mode=True)
+    generators = [
+        fn
+        for fn in app.fns.values()
+        if fn.fn and fn.fn.__name__ in {"vad_segment", "synthetic_pipeline"}
+    ]
+    assert {fn.fn.__name__ for fn in generators} == {"vad_segment", "synthetic_pipeline"}
+    assert all(fn.queue is not False for fn in generators)

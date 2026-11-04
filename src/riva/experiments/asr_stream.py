@@ -776,7 +776,6 @@ def build_vad_app(
                     diagnostics,
                 ],
                 concurrency_limit=1,
-                queue=False,
                 api_visibility="private",
             )
         app.load(
