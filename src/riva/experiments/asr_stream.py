@@ -4,6 +4,7 @@ import argparse
 import base64
 import binascii
 import json
+import math
 import os
 import re
 import sys
@@ -46,6 +47,29 @@ class SessionTurn:
     replays_skipped: int = 0
 
 
+SPEECH_STATE_TTL_SECONDS = 35.0  # longer than the 30 s segment cap: a closed tab cannot wedge it
+TRANSCRIPT_LIMIT = 8000  # matches ReplyRun's bound on a transcript
+
+
+@dataclass
+class SpeechState:
+    """What the browser VAD reported about the user's speech (browser clock in ms)."""
+
+    speaking: bool = False
+    last_event_ms: float = -1.0
+    last_start_ms: float = -1.0
+    updated: float = 0.0
+    held: list[str] = field(default_factory=list)
+
+
+def merge_transcripts(pieces: list[str], limit: int = TRANSCRIPT_LIMIT) -> str:
+    """Join unanswered transcripts into one turn, dropping the oldest if over the bound."""
+    kept = [piece.strip() for piece in pieces if piece.strip()]
+    while len(kept) > 1 and len(" ".join(kept)) > limit:
+        kept.pop(0)
+    return " ".join(kept)
+
+
 class AsrSessions:
     def __init__(
         self,
@@ -57,6 +81,45 @@ class AsrSessions:
         self.lock = threading.RLock()
         self.turns: dict[str, SessionTurn] = {}
         self.vad_diagnostics: dict[str, list[dict[str, Any]]] = {}
+        self.speech: dict[str, SpeechState] = {}
+
+    def note_speech(self, identity: SessionIdentity, kind: str, at_ms: float) -> None:
+        """Record a browser speech start/end; events older than the newest one are ignored."""
+        if kind not in ("start", "end") or not math.isfinite(at_ms) or at_ms < 0:
+            raise ValueError("invalid speech event")
+        with self.lock:
+            state = self.speech.setdefault(identity.session_id, SpeechState())
+            if at_ms < state.last_event_ms:
+                return
+            state.last_event_ms = at_ms
+            state.speaking = kind == "start"
+            if kind == "start":
+                state.last_start_ms = at_ms
+            state.updated = time.monotonic()
+
+    def newer_speech(self, identity: SessionIdentity, segment_end_ms: float | None) -> bool:
+        """True while the user is speaking, or started speaking after the given segment ended."""
+        with self.lock:
+            state = self.speech.get(identity.session_id)
+            if state is None:
+                return False
+            if state.speaking and time.monotonic() - state.updated <= SPEECH_STATE_TTL_SECONDS:
+                return True
+            return segment_end_ms is not None and state.last_start_ms > segment_end_ms
+
+    def hold(self, identity: SessionIdentity, pieces: list[str], *, front: bool = False) -> None:
+        """Keep transcripts that have not been answered yet for the user's next turn."""
+        with self.lock:
+            state = self.speech.setdefault(identity.session_id, SpeechState())
+            state.held = [*pieces, *state.held] if front else [*state.held, *pieces]
+
+    def take_held(self, identity: SessionIdentity) -> list[str]:
+        with self.lock:
+            state = self.speech.get(identity.session_id)
+            if state is None:
+                return []
+            held, state.held = state.held, []
+            return held
 
     def update_vad_diagnostics(
         self, identity: SessionIdentity, events: list[dict[str, Any]]
@@ -145,6 +208,7 @@ class AsrSessions:
         with self.lock:
             turn = self.turns.pop(identity.session_id, None)
             self.vad_diagnostics.pop(identity.session_id, None)
+            self.speech.pop(identity.session_id, None)
         if turn is not None:
             turn.live.close()
 
@@ -199,6 +263,7 @@ def vad_segment_updates(
             list(timeline),
         )
 
+    segment_end_ms: float | None = None
     try:
         if not isinstance(payload, str) or len(payload) > 1_400_000:
             raise ValueError("invalid_segment")
@@ -243,6 +308,8 @@ def vad_segment_updates(
                 raise ValueError("invalid_segment")
             if not np.isfinite(at_ms):
                 raise ValueError("invalid_segment")
+            if browser_event["stage"] == "vad.speech_end":
+                segment_end_ms = float(at_ms)
             record(str(browser_event["stage"]), "browser", float(at_ms) - float(started_ms))
         record("segment.event_received")
         record("segment.validated")
@@ -316,13 +383,35 @@ def vad_segment_updates(
         detail = "SYNTHETIC TEST · " + detail
         metadata["synthetic"] = True
     run = None
+    previous: list[str] = []
+    held_now = False
     if replies is not None and result.status == "completed" and result.text:
-        try:
-            run, created = replies.start(identity, saved, result.text, float(started_ms))
-        except (ValueError, OSError):
-            run = None
-            detail += " · Antwort konnte nicht gestartet werden"
-    record("reply.generation_started" if run else "reply.not_started")
+        if sessions.newer_speech(identity, segment_end_ms):
+            # The user is still talking (or talked again): answer everything together later.
+            sessions.hold(identity, [result.text])
+            held_now = True
+            write_event(
+                Event(EventName.RESPONSE_HELD, identity.session_id, saved.metadata.turn_id),
+                sys.stdout,
+            )
+            detail += " · wartet auf weitere Sprache"
+        else:
+            previous = sessions.take_held(identity)
+            try:
+                run, created = replies.start(
+                    identity,
+                    saved,
+                    merge_transcripts([*previous, result.text]),
+                    float(started_ms),
+                )
+            except (ValueError, OSError):
+                sessions.hold(identity, [*previous, result.text], front=True)
+                run = None
+                detail += " · Antwort konnte nicht gestartet werden"
+    if held_now:
+        record("reply.held")
+    else:
+        record("reply.generation_started" if run else "reply.not_started")
     yield update(result.partial, result.text or "", detail, metadata)
     if run is not None and created:
         write_event(
@@ -351,6 +440,10 @@ def vad_segment_updates(
             Event(event_name, identity.session_id, saved.metadata.turn_id, run.generation_id),
             sys.stdout,
         )
+        heard = run.first_playback_ms is not None or run.playback_signal_received
+        if run.status == "cancelled" and not heard:
+            # Nobody heard this reply: the next turn must answer these words as well.
+            sessions.hold(identity, [*previous, result.text or ""], front=True)
         record(
             {"completed": "reply.completed", "cancelled": "reply.cancelled"}.get(
                 run.status, "reply.failed"
@@ -538,8 +631,20 @@ async (enabled) => {
   };
   window.rivaVadStage = stage;
   if (!window.rivaVad) {
-    window.rivaVad = {instance: null, loading: null, enabled: false, busy: false, pending: []};
+    window.rivaVad = {
+      instance: null, loading: null, enabled: false, busy: false, pending: [], speechEvents: [],
+    };
   }
+  window.rivaVad.speechEvents = window.rivaVad.speechEvents || [];
+  window.rivaVad.pending = window.rivaVad.pending || [];
+  // Tell the backend about confirmed speech start/end (browser clock), via a hidden control.
+  const fireSpeech = (kind, at) => {
+    const host = document.querySelector("#riva-vad-speech");
+    const button = host instanceof HTMLButtonElement ? host : host?.querySelector("button");
+    if (!button) return;
+    window.rivaVad.speechEvents.push({kind: kind, at: at});
+    button.click();
+  };
   if (enabled && window.rivaVad.enabled && window.rivaVad.instance) {
     stage("already listening");
     return;
@@ -604,18 +709,19 @@ async (enabled) => {
         stage("speech start");
       },
       onSpeechRealStart: () => {
-        // Confirmed speech (not a misfire): tell the backend to stop generating the old reply.
-        const host = document.querySelector("#riva-vad-speech");
-        const button = host instanceof HTMLButtonElement ? host : host?.querySelector("button");
-        if (button) button.click();
+        // Confirmed speech (not a misfire): the backend stops/holds replies for it.
+        fireSpeech("start", window.rivaVad.speechStartMs || performance.now());
         stage("speech confirmed");
       },
       onSpeechEnd: (audio) => {
         window.rivaVad.speaking = false;
+        const endedMs = performance.now();
+        fireSpeech("end", endedMs);
         if (window.rivaDropReplyAudio) window.rivaDropReplyAudio();
         if (!window.rivaVad.enabled) return;
-        if (window.rivaVad.pending.length >= 2) {
-          stage("busy: pending segment limit reached");
+        if (window.rivaVad.pending.length >= 4) {
+          if (window.rivaReport) window.rivaReport("segment", "dropped_busy");
+          stage("busy: pending segment limit reached, speech dropped");
           return;
         }
         const pcm = new Int16Array(audio.length);
@@ -628,7 +734,6 @@ async (enabled) => {
         for (let i = 0; i < bytes.length; i += 0x8000) {
           binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
         }
-        const endedMs = performance.now();
         window.rivaVad.pending.push({
           pcm16_b64: btoa(binary),
           started_ms: window.rivaVad.speechStartMs || endedMs,
@@ -692,9 +797,20 @@ def build_vad_app(
         )
         yield from vad_segment_updates(payload, identity, sessions, replies, allow_synthetic=True)
 
-    def vad_speech(identity: SessionIdentity) -> None:
-        """The user is speaking: stop generating a reply that is still in progress."""
-        if replies is not None:
+    def vad_speech(speech_payload: str, identity: SessionIdentity) -> None:
+        """Browser VAD reported confirmed speech start/end (client clock, ms)."""
+        try:
+            data = json.loads(speech_payload)
+            if not isinstance(data, dict) or set(data) != {"kind", "at"}:
+                raise ValueError("invalid_speech_event")
+            at = data["at"]
+            if isinstance(at, bool) or not isinstance(at, (int, float)):
+                raise ValueError("invalid_speech_event")
+            sessions.note_speech(identity, str(data["kind"]), float(at))
+        except (ValueError, TypeError):
+            return
+        if data["kind"] == "start" and replies is not None:
+            # Speaking over an unfinished reply: stop generating it.
             replies.cancel_generating(identity)
 
     def release(identity: SessionIdentity) -> None:
@@ -732,7 +848,8 @@ def build_vad_app(
         diagnostics = gr.JSON(label="VAD → ASR event timeline")
         payload = gr.Textbox(visible=False)
         submit = gr.Button("Submit speech segment", visible="hidden", elem_id="riva-vad-submit")
-        speech = gr.Button("Speech started", visible="hidden", elem_id="riva-vad-speech")
+        speech_payload = gr.Textbox(visible=False)
+        speech = gr.Button("Speech event", visible="hidden", elem_id="riva-vad-speech")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
         status = gr.Textbox(label="Segmentstatus", interactive=False)
@@ -789,8 +906,12 @@ def build_vad_app(
         )
         speech.click(
             vad_speech,
-            inputs=[identity],
+            inputs=[speech_payload, identity],
             outputs=[],
+            js=(
+                "(payload, identity) => "
+                "[JSON.stringify(window.rivaVad.speechEvents.shift() || {}), identity]"
+            ),
             queue=False,
             api_visibility="private",
         )

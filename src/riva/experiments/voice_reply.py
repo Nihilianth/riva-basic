@@ -402,6 +402,7 @@ if (!window.rivaPlaybackInstalled) {
       body: JSON.stringify({event: event, detail: token})
     }).catch(() => {});
   };
+  window.rivaReport = report;
   const note = (name) => {
     if (window.rivaVadStage) window.rivaVadStage('audio ' + name);
     report('audio', name);
@@ -536,7 +537,11 @@ if (!window.rivaPlaybackInstalled) {
     demo.queue(max_size=64)
     api = FastAPI()
 
-    browser_events = {"hls_error": EventName.BROWSER_HLS_ERROR, "audio": EventName.BROWSER_AUDIO}
+    browser_events = {
+        "hls_error": EventName.BROWSER_HLS_ERROR,
+        "audio": EventName.BROWSER_AUDIO,
+        "segment": EventName.BROWSER_SEGMENT,
+    }
 
     @api.post("/riva/browser_event")
     async def record_browser_event(request: Request) -> dict[str, bool]:

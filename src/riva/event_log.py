@@ -17,6 +17,8 @@ class EventName(StrEnum):
     RESPONSE_COMPLETED = "response.completed"
     RESPONSE_FAILED = "response.failed"
     RESPONSE_CANCELLED = "response.cancelled"
+    RESPONSE_HELD = "response.held"
+    TTS_REQUESTED = "tts.requested"
     PLAYBACK_FALLBACK = "playback.fallback"
     PLAYBACK_EVENT = "playback.event"
     PLAYBACK_STARTED = "playback.started"
@@ -24,6 +26,7 @@ class EventName(StrEnum):
     PROVIDER_FAILED = "provider.failed"
     BROWSER_HLS_ERROR = "browser.hls_error"
     BROWSER_AUDIO = "browser.audio"
+    BROWSER_SEGMENT = "browser.segment"
 
 
 DETAIL_TOKEN = re.compile(r"[A-Za-z0-9_.:-]{1,48}")

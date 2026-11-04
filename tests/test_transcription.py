@@ -12,7 +12,12 @@ import pytest
 from riva.audio.recordings import RecordingStore, new_development_session
 from riva.audio.transcription import AsrConfig, LiveTurn, PcmEncoder, Transcript, mono_float
 from riva.audio.transcripts import save_transcript
-from riva.experiments.asr_stream import AsrSessions, build_asr_app, build_vad_app
+from riva.experiments.asr_stream import (
+    AsrSessions,
+    build_asr_app,
+    build_vad_app,
+    merge_transcripts,
+)
 
 
 class FakeWire:
@@ -933,7 +938,7 @@ def test_speech_start_cancels_generating_reply_and_frees_the_segment_handler(
         deadline = time.monotonic() + 5
         while replies.current(identity) is None and time.monotonic() < deadline:
             time.sleep(0.02)
-        handlers["vad_speech"](identity)  # browser: confirmed speech start
+        handlers["vad_speech"](json.dumps({"kind": "start", "at": 10.0}), identity)
         worker.join(timeout=5)
         assert not worker.is_alive(), "segment handler must end once its reply is cancelled"
         stages = [row["stage"] for row in updates[-1][7]]
@@ -942,7 +947,154 @@ def test_speech_start_cancels_generating_reply_and_frees_the_segment_handler(
         out = capsys.readouterr().out
         assert "response.cancelled" in out and "response.completed" not in out
         assert "Erster Satz" not in out  # no reply text in the event log
+        # nobody heard the cancelled reply: its words are kept for the next turn
+        assert sessions.take_held(identity) == ["Synthetischer Testlauf."]
     finally:
         release_text.set()
         replies.release(identity)
         sessions.release(identity)
+
+
+def _synthetic_vad_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider_factory):
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager
+    from riva.experiments.vad_self_test import SyntheticWire
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), SyntheticWire)
+    replies = ReplyManager(ReplyConfig(), provider_factory)
+    app = build_vad_app(sessions, replies, test_mode=True)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    return sessions, replies, handlers
+
+
+def _segment(end_ms: float) -> str:
+    return json.dumps(
+        {
+            "pcm16_b64": base64.b64encode(np.zeros(16000, dtype="<i2").tobytes()).decode("ascii"),
+            "started_ms": end_ms - 1000,
+            "events": [{"stage": "vad.speech_end", "at_ms": end_ms}],
+            "synthetic": True,
+        }
+    )
+
+
+def test_newer_speech_holds_the_transcript_and_the_next_turn_merges_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from riva.experiments.vad_self_test import SyntheticReplyProvider
+
+    seen: list[str] = []
+
+    class Recording(SyntheticReplyProvider):
+        def text(self, transcript, config):
+            seen.append(transcript)
+            return super().text(transcript, config)
+
+    sessions, replies, handlers = _synthetic_vad_app(tmp_path, monkeypatch, Recording)
+    identity = new_development_session()
+    try:
+        # The user started talking again (t=5000) after this segment ended (t=2000).
+        handlers["vad_speech"](json.dumps({"kind": "start", "at": 5000.0}), identity)
+        first = list(handlers["vad_segment"](_segment(2000.0), identity))
+        assert seen == [] and replies.current(identity) is None
+        assert "reply.held" in [row["stage"] for row in first[-1][7]]
+        assert "wartet" in first[-1][2]
+        # That later speech ended and was submitted: one LLM call over both transcripts.
+        handlers["vad_speech"](json.dumps({"kind": "end", "at": 9000.0}), identity)
+        second = list(handlers["vad_segment"](_segment(9000.0), identity))
+        assert seen == ["Synthetischer Testlauf. Synthetischer Testlauf."]
+        assert second[-1][5]["status"] == "completed"
+        out = capsys.readouterr().out
+        assert "response.held" in out and out.count("response.started") == 1
+        assert "tts.requested" in out and "Synthetischer" not in out
+        assert sessions.take_held(identity) == []
+    finally:
+        replies.release(identity)
+        sessions.release(identity)
+
+
+def test_heard_reply_cancelled_by_speech_is_not_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from riva.audio.replies import TextPart
+
+    release_text = threading.Event()
+
+    class Slow:
+        def text(self, transcript, config):
+            yield TextPart("delta", "Erster Satz. ")
+            release_text.wait(5)
+            yield TextPart("completed", "Erster Satz. ")
+
+        def speech(self, phrase, config):
+            yield b"\0\0" * 12000
+
+    sessions, replies, handlers = _synthetic_vad_app(tmp_path, monkeypatch, Slow)
+    identity = new_development_session()
+    worker = threading.Thread(
+        target=lambda: list(handlers["vad_segment"](_segment(2000.0), identity)), daemon=True
+    )
+    try:
+        worker.start()
+        deadline = time.monotonic() + 5
+        while replies.current(identity) is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        run = replies.current(identity)
+        assert run is not None
+        run.note_playback_signal()  # the browser reported that it started playing this reply
+        handlers["vad_speech"](json.dumps({"kind": "start", "at": 9000.0}), identity)
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert sessions.take_held(identity) == []
+    finally:
+        release_text.set()
+        replies.release(identity)
+        sessions.release(identity)
+
+
+def test_speech_state_orders_events_and_expires(tmp_path: Path) -> None:
+    sessions = AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), FakeWire)
+    identity = new_development_session()
+    assert not sessions.newer_speech(identity, 10.0)
+    sessions.note_speech(identity, "start", 200.0)
+    sessions.note_speech(identity, "end", 150.0)  # arrived late: older than the newest event
+    assert sessions.newer_speech(identity, None)
+    sessions.note_speech(identity, "end", 300.0)
+    assert not sessions.newer_speech(identity, None)
+    assert sessions.newer_speech(identity, 100.0)  # a start at 200 happened after t=100
+    assert not sessions.newer_speech(identity, 250.0)
+    sessions.note_speech(identity, "start", 400.0)
+    sessions.speech[identity.session_id].updated -= 100  # tab closed: flag must not wedge
+    assert not sessions.newer_speech(identity, None)
+    for bad in ("pause", "start"):
+        with pytest.raises(ValueError):
+            sessions.note_speech(identity, bad, float("nan") if bad == "start" else 1.0)
+    sessions.release(identity)
+
+
+def test_vad_speech_ignores_malformed_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from riva.experiments.vad_self_test import SyntheticReplyProvider
+
+    sessions, replies, handlers = _synthetic_vad_app(tmp_path, monkeypatch, SyntheticReplyProvider)
+    identity = new_development_session()
+    for bad in (
+        "",
+        "not json",
+        "[]",
+        '{"kind": "start"}',
+        '{"kind": "start", "at": true}',
+        '{"kind": "jump", "at": 1}',
+        '{"kind": "start", "at": -1}',
+    ):
+        handlers["vad_speech"](bad, identity)
+    assert not sessions.newer_speech(identity, 0.0)
+    sessions.release(identity)
+
+
+def test_merge_transcripts_joins_in_order_and_stays_bounded() -> None:
+    assert merge_transcripts(["Hallo", " ", "wie geht", "es dir"]) == "Hallo wie geht es dir"
+    assert merge_transcripts(["a" * 60, "b" * 60], limit=100) == "b" * 60
+    assert merge_transcripts([]) == ""

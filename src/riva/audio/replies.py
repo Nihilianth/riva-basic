@@ -8,6 +8,7 @@ import math
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import wave
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 from riva.audio.recordings import SavedRecording, SessionIdentity, private_directory
 from riva.audio.transcripts import atomic_private_text
+from riva.event_log import Event, EventName, write_event
 
 RATE = 24000
 INSTRUCTIONS = (
@@ -281,6 +283,15 @@ class ReplyRun:
                     return
                 with self.lock:
                     self.requested_phrases.append(phrase)
+                write_event(
+                    Event(
+                        EventName.TTS_REQUESTED,
+                        self.saved.metadata.session_id,
+                        self.saved.metadata.turn_id,
+                        self.generation_id,
+                    ),
+                    sys.stdout,
+                )
                 iterator = self.provider.speech(phrase, self.config)
                 pending = b""
                 produced = 0
