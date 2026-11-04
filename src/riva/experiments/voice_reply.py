@@ -377,6 +377,24 @@ if (!window.rivaPlaybackInstalled) {
     if (match) window.rivaCurrentGeneration = match[1];
   }, 250);
   const note = (name) => { if (window.rivaVadStage) window.rivaVadStage(name); };
+  const userSpeaking = () => Boolean(window.rivaVad && window.rivaVad.speaking);
+  // Barge-in: never play (or keep playing) a reply while VAD hears the user.
+  window.rivaHoldReplyAudio = () => {
+    document.querySelectorAll('audio').forEach((audio) => {
+      if (audio.paused) return;
+      audio.dataset.rivaHeld = '1';
+      try { audio.pause(); } catch (_) {}
+      note('reply audio: paused (user speaking)');
+    });
+  };
+  window.rivaResumeReplyAudio = () => {
+    document.querySelectorAll('audio').forEach((audio) => {
+      if (audio.dataset.rivaHeld !== '1') return;
+      audio.dataset.rivaHeld = '';
+      audio.play().catch(() => {});
+      note('reply audio: resumed (misfire)');
+    });
+  };
   const watchStream = (audio) => {
     const src = audio.currentSrc || audio.getAttribute('src') || '';
     if (!src || audio.dataset.rivaSrc === src) return;
@@ -384,6 +402,12 @@ if (!window.rivaPlaybackInstalled) {
     note('reply audio: new stream');
     // Gradio's autoplay only fires for the first stream; start each new reply explicitly.
     const start = () => {
+      if (userSpeaking()) {
+        audio.dataset.rivaHeld = '1';
+        try { audio.pause(); } catch (_) {}
+        note('reply audio: held (user speaking)');
+        return;
+      }
       audio.play().then(
         () => note('reply audio: playing'),
         (error) => {
@@ -401,6 +425,12 @@ if (!window.rivaPlaybackInstalled) {
       if (audio.dataset.rivaEndBound !== '1') {
         audio.dataset.rivaEndBound = '1';
         audio.addEventListener('ended', () => note('reply audio: ended'));
+        audio.addEventListener('play', () => {
+          if (!userSpeaking()) return;
+          audio.dataset.rivaHeld = '1';
+          try { audio.pause(); } catch (_) {}
+          note('reply audio: held (user speaking)');
+        });
         audio.addEventListener('error', () => note('reply audio: element error'));
       }
       if (audio.dataset.rivaPlayBound === '1') return;

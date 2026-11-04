@@ -598,9 +598,12 @@ async (enabled) => {
       minSpeechMs: 250,
       onSpeechStart: () => {
         window.rivaVad.speechStartMs = performance.now();
+        window.rivaVad.speaking = true;
+        if (window.rivaHoldReplyAudio) window.rivaHoldReplyAudio();
         stage("speech start");
       },
       onSpeechEnd: (audio) => {
+        window.rivaVad.speaking = false;
         if (!window.rivaVad.enabled) return;
         if (window.rivaVad.pending.length >= 2) {
           stage("busy: pending segment limit reached");
@@ -630,7 +633,11 @@ async (enabled) => {
         stage("speech end, segment queued");
         submitNext();
       },
-      onVADMisfire: () => stage("misfire (too short)"),
+      onVADMisfire: () => {
+        window.rivaVad.speaking = false;
+        if (window.rivaResumeReplyAudio) window.rivaResumeReplyAudio();
+        stage("misfire (too short)");
+      },
     });
     window.rivaVad.enabled = true;
     await window.rivaVad.instance.start();
