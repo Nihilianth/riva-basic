@@ -141,6 +141,57 @@ def asr_app_kwargs(app: "gr.Blocks") -> dict[str, Any]:
 def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) -> "gr.Blocks":
     import gradio as gr
 
+    vad_js = r"""
+async () => {
+  const status = (message) => {
+    const nodes = document.querySelectorAll("[data-testid='markdown']");
+    for (const node of nodes) {
+      if (node.textContent && node.textContent.includes("VAD is")) node.textContent = message;
+    }
+  };
+  if (!window.rivaVad) {
+    window.rivaVad = {instance: null, loading: null, enabled: false};
+  }
+  if (!window.rivaVad.loading) {
+    window.rivaVad.loading = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js";
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+  try {
+    await window.rivaVad.loading;
+    if (!window.vad || !window.vad.MicVAD) throw new Error("VAD library unavailable");
+    if (window.rivaVad.instance) window.rivaVad.instance.destroy();
+    window.rivaVad.instance = await window.vad.MicVAD.new({
+      model: "v5",
+      onSpeechStart: () => {
+        const button = [...document.querySelectorAll("button")].find(
+          (b) => b.textContent.includes("Start recording")
+        );
+        if (button) button.click();
+      },
+      onSpeechEnd: () => {
+        const button = [...document.querySelectorAll("button")].find(
+          (b) => b.textContent.includes("Stop recording")
+        );
+        if (button) button.click();
+      },
+      onVADMisfire: () => {},
+    });
+    await window.rivaVad.instance.start();
+    window.rivaVad.enabled = true;
+    status("VAD is active in the browser.");
+  } catch (error) {
+    window.rivaVad.enabled = false;
+    status("VAD could not start; use manual recording.");
+    console.warn("RIVA VAD unavailable", error);
+  }
+}
+"""
+
     def begin(identity: SessionIdentity) -> gr.Button:
         if replies is not None:
             run = replies.current(identity)
@@ -248,6 +299,7 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             value=False,
             info="VAD stops the current turn after speech ends; explicit save remains required.",
         )
+        vad_status = gr.Markdown("VAD is inactive (manual mode).")
         discard_button = gr.Button("Ungespeicherte Aufnahme verwerfen")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
@@ -283,9 +335,22 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             api_visibility="private",
         )
         continuous_mode.change(
-            lambda enabled: gr.Button(interactive=not enabled),
+            lambda enabled: (
+                gr.Button(interactive=not enabled),
+                "VAD is enabled in the browser. Speak normally; silence stops the current turn."
+                if enabled
+                else "VAD is inactive (manual mode).",
+            ),
             inputs=[continuous_mode],
-            outputs=[finish_button],
+            outputs=[finish_button, vad_status],
+            api_visibility="private",
+        )
+        continuous_mode.change(
+            None,
+            inputs=[continuous_mode],
+            outputs=[],
+            js=vad_js,
+            queue=False,
             api_visibility="private",
         )
         microphone.stop_recording(
