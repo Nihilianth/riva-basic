@@ -269,7 +269,7 @@ def add_reply_controls(
     reply_event = button.click(
         reply,
         inputs=[identity, clock],
-        outputs=[text, speech, metrics, latency, button, stop_button],
+        outputs=[text, speech, metrics, latency],
         js="(identity, _) => [identity, performance.now()]",
         concurrency_limit=1,
         api_visibility="private",
@@ -277,7 +277,7 @@ def add_reply_controls(
     stop_button.click(
         stop_reply,
         inputs=[identity, clock],
-        outputs=[text, speech, metrics, latency, button, stop_button],
+        outputs=[text, speech, metrics, latency],
         js=r"""(identity, _) => {
   document.querySelectorAll('audio').forEach((audio) => {
     try {
@@ -291,7 +291,13 @@ def add_reply_controls(
   window.rivaGenerationRecorded = true;
   return [identity, performance.now()];
 }""",
-        cancels=[reply_event],
+        queue=False,
+        api_visibility="private",
+    )
+    reply_event.then(
+        lambda: (gr.Button(interactive=True), gr.Button(interactive=False)),
+        inputs=[],
+        outputs=[button, stop_button],
         queue=False,
         api_visibility="private",
     )
