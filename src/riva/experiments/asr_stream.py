@@ -709,7 +709,7 @@ def build_vad_app(
         gr.Markdown("Browser VAD: waiting for page script…", elem_id="riva-vad-state")
         diagnostics = gr.JSON(label="VAD → ASR event timeline")
         payload = gr.Textbox(visible=False)
-        submit = gr.Button("Submit speech segment", visible=False, elem_id="riva-vad-submit")
+        submit = gr.Button("Submit speech segment", visible="hidden", elem_id="riva-vad-submit")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
         status = gr.Textbox(label="Segmentstatus", interactive=False)

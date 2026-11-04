@@ -872,3 +872,15 @@ def test_vad_generator_events_are_queued_so_all_updates_stream(
     ]
     assert {fn.fn.__name__ for fn in generators} == {"vad_segment", "synthetic_pipeline"}
     assert all(fn.queue is not False for fn in generators)
+
+
+def test_vad_submit_button_stays_in_dom_for_browser_click(tmp_path: Path) -> None:
+    """visible=False removes the element from the DOM; the browser JS must click it."""
+    app = build_vad_app(AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), FakeWire), None)
+    buttons = [
+        block
+        for block in app.blocks.values()
+        if getattr(block, "elem_id", None) == "riva-vad-submit"
+    ]
+    assert len(buttons) == 1
+    assert buttons[0].visible == "hidden"
