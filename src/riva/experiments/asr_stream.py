@@ -155,8 +155,14 @@ async () => {
   if (!window.rivaVad.loading) {
     window.rivaVad.loading = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js";
-      script.onload = resolve;
+      script.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js";
+      script.onload = () => {
+        const vadScript = document.createElement("script");
+        vadScript.src = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js";
+        vadScript.onload = resolve;
+        vadScript.onerror = reject;
+        document.head.appendChild(vadScript);
+      };
       script.onerror = reject;
       document.head.appendChild(script);
     });
