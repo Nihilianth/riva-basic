@@ -186,7 +186,7 @@ async (enabled) => {
       if (!window.rivaVad.enabled || window.rivaVad.busy || !window.rivaVad.pending.length) return;
       window.rivaVad.busy = true;
       window.rivaVad.activePayload = window.rivaVad.pending.shift();
-      const button = document.querySelector("#riva-vad-submit button");
+      const button = document.querySelector("#riva-vad-submit");
       if (button) button.click();
       else {
         window.rivaVad.busy = false;
