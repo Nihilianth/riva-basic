@@ -147,8 +147,8 @@ def add_reply_controls(
                 wav if wav is not None else gr.skip(),
                 metrics,
                 format_metrics(metrics),
-                gr.skip(),
-                gr.skip(),
+                gr.Button(interactive=False),
+                gr.Button(interactive=True),
             )
         name = (
             EventName.RESPONSE_COMPLETED

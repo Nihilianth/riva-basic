@@ -599,7 +599,15 @@ def test_voice_ui_stop_button_cancels_playback_and_resets_controls(
         assert not first_step[4].interactive  # button disabled
         assert first_step[5].interactive  # stop_button enabled
 
+        # Consume one streamed update before cancellation. The stop control
+        # must remain available while TTS audio is delivered.
+        streamed_step = next(reply_iter)
+        assert not streamed_step[4].interactive
+        assert streamed_step[5].interactive
+
         # Stop via stop_reply handler
+        # The generator may already have a queued audio update; cancellation
+        # must make subsequent streamed updates inert as well.
         stop_out = handlers["stop_reply"](identity, 400)
         assert stop_out[1] is None  # speech audio cleared
         assert stop_out[2]["status"] == "cancelled"
