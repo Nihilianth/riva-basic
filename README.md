@@ -82,9 +82,14 @@ that starts transcription after commit rather than providing live captions.
 `--delay minimal` can be evaluated for the live model; measure accuracy as well as
 latency. No automatic retries or silent model fallback are performed.
 
-Only manual turn completion is currently supported. Continuous listening,
-endpointing, assistant replies and interruption are later tasks. Provider activity
-expires after 20 seconds without new audio; a turn is limited to 120 seconds.
+Manual recording remains supported with explicit stop/save. Experimental
+continuous mode uses browser-side Silero VAD as the microphone owner and submits
+each detected 16 kHz PCM16 speech segment (maximum 30 seconds) through a hidden
+Gradio event. Only the detected segment, including VAD's configured short context
+padding, is privately saved and sent through streaming ASR. In the voice app,
+completed segments also trigger the existing LLM/TTS reply flow. VAD/model loading
+and continuous mode still need live browser verification. Provider activity
+expires after 20 seconds without new audio.
 This remains a loopback-only, unauthenticated development tool, not a participant app.
 
 ## Try the microphone experiment

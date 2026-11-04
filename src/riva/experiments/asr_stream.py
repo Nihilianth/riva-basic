@@ -1,16 +1,20 @@
 """German streaming transcription experiment: native Gradio chunks → OpenAI WS."""
 
 import argparse
+import base64
+import binascii
+import json
 import os
 import re
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from starlette.middleware import Middleware
 
 from riva.audio.recordings import (
@@ -142,7 +146,7 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
     import gradio as gr
 
     vad_js = r"""
-async () => {
+async (enabled) => {
   const status = (message) => {
     const nodes = document.querySelectorAll("[data-testid='markdown']");
     for (const node of nodes) {
@@ -150,7 +154,14 @@ async () => {
     }
   };
   if (!window.rivaVad) {
-    window.rivaVad = {instance: null, loading: null, enabled: false};
+    window.rivaVad = {instance: null, loading: null, enabled: false, busy: false, pending: []};
+  }
+  if (!enabled) {
+    window.rivaVad.enabled = false;
+    window.rivaVad.pending = [];
+    if (window.rivaVad.instance) window.rivaVad.instance.pause();
+    status("VAD is inactive (manual mode).");
+    return;
   }
   if (!window.rivaVad.loading) {
     window.rivaVad.loading = new Promise((resolve, reject) => {
@@ -171,28 +182,55 @@ async () => {
     await window.rivaVad.loading;
     if (!window.vad || !window.vad.MicVAD) throw new Error("VAD library unavailable");
     if (window.rivaVad.instance) window.rivaVad.instance.destroy();
+    const submitNext = () => {
+      if (!window.rivaVad.enabled || window.rivaVad.busy || !window.rivaVad.pending.length) return;
+      window.rivaVad.busy = true;
+      window.rivaVad.activePayload = window.rivaVad.pending.shift();
+      const button = document.querySelector("#riva-vad-submit button");
+      if (button) button.click();
+      else {
+        window.rivaVad.busy = false;
+        status("VAD segment submission control is unavailable.");
+      }
+    };
+    window.rivaVad.submitNext = submitNext;
     const vadBase = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/";
     const ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
     window.rivaVad.instance = await window.vad.MicVAD.new({
       model: "v5",
       baseAssetPath: vadBase,
       onnxWASMBasePath: ortBase,
-      onSpeechStart: () => {
-        const button = [...document.querySelectorAll("button")].find(
-          (b) => b.textContent.includes("Start recording")
-        );
-        if (button) button.click();
-      },
-      onSpeechEnd: () => {
-        const button = [...document.querySelectorAll("button")].find(
-          (b) => b.textContent.includes("Stop recording")
-        );
-        if (button) button.click();
+      redemptionMs: 900,
+      preSpeechPadMs: 300,
+      minSpeechMs: 250,
+      onSpeechStart: () => status("Speech detected…"),
+      onSpeechEnd: (audio) => {
+        if (!window.rivaVad.enabled) return;
+        if (window.rivaVad.pending.length >= 2) {
+          status("VAD busy; segment limit reached. Wait for the current reply.");
+          return;
+        }
+        const pcm = new Int16Array(audio.length);
+        for (let i = 0; i < audio.length; i++) {
+          const sample = Math.max(-1, Math.min(1, audio[i]));
+          pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+        }
+        const bytes = new Uint8Array(pcm.buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        window.rivaVad.pending.push(JSON.stringify({
+          pcm16_b64: btoa(binary),
+          started_ms: performance.now(),
+        }));
+        status("Speech segment captured; processing…");
+        submitNext();
       },
       onVADMisfire: () => {},
     });
-    await window.rivaVad.instance.start();
     window.rivaVad.enabled = true;
+    await window.rivaVad.instance.start();
     status("VAD is active in the browser.");
   } catch (error) {
     window.rivaVad.enabled = false;
@@ -234,13 +272,74 @@ async () => {
             sessions.current(identity).stopped = True
         return gr.Button(interactive=True)
 
-    def continuous_stopped(identity: SessionIdentity, enabled: bool) -> gr.Button:
-        """Mark an endpoint without starting a new turn or saving it."""
-        if not enabled:
-            return gr.Button(interactive=True)
-        with suppress(KeyError):
+    def vad_segment(payload: str, identity: SessionIdentity) -> Iterator[tuple[Any, ...]]:
+        """Decode one VAD-owned PCM segment and run isolated ASR then optional reply."""
+        try:
+            if not isinstance(payload, str) or len(payload) > 1_400_000:
+                raise ValueError("invalid_segment")
+            data = json.loads(payload)
+            if not isinstance(data, dict) or set(data) != {"pcm16_b64", "started_ms"}:
+                raise ValueError("invalid_segment")
+            encoded = data["pcm16_b64"]
+            if not isinstance(encoded, str):
+                raise ValueError("invalid_segment")
+            pcm = base64.b64decode(encoded, validate=True)
+            if len(pcm) % 2 or not 3200 <= len(pcm) <= 960_000:
+                raise ValueError("invalid_segment")
+            samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
+            started_ms = data["started_ms"]
+            if isinstance(started_ms, bool) or not isinstance(started_ms, (int, float)):
+                raise ValueError("invalid_segment")
+            if not np.isfinite(started_ms) or started_ms < 0:
+                raise ValueError("invalid_segment")
+            sessions.begin(identity)
+            sessions.append((16000, samples), identity)
             sessions.current(identity).stopped = True
-        return gr.Button(interactive=True)
+            saved = sessions.finish(identity)
+            result, duration = sessions.snapshot(identity)
+            detail = f"VAD segment saved · {duration:.2f} s · ASR {result.status}"
+        except (KeyError, ValueError, OSError, binascii.Error):
+            yield "", "", "VAD segment rejected or could not be processed", {}, "", None, {}, ""
+            return
+        run = None
+        if replies is not None and result.status == "completed" and result.text:
+            try:
+                run, created = replies.start(identity, saved, result.text, float(started_ms))
+            except (ValueError, OSError):
+                run = None
+                detail += " · Antwort konnte nicht gestartet werden"
+        metadata = {**asdict(saved.metadata), "transcription_status": result.status}
+        yield result.partial, result.text or "", detail, metadata, "", None, {}, ""
+        if run is not None and created:
+            write_event(
+                Event(
+                    EventName.RESPONSE_STARTED,
+                    identity.session_id,
+                    saved.metadata.turn_id,
+                    run.generation_id,
+                ),
+                sys.stdout,
+            )
+            for reply_text, wav, metrics in run.updates():
+                yield (
+                    result.partial,
+                    result.text or "",
+                    f"VAD segment saved · {duration:.2f} s · reply {metrics['status']}",
+                    metadata,
+                    reply_text,
+                    wav,
+                    metrics,
+                    "",
+                )
+            event_name = (
+                EventName.RESPONSE_COMPLETED
+                if run.status == "completed"
+                else EventName.RESPONSE_FAILED
+            )
+            write_event(
+                Event(event_name, identity.session_id, saved.metadata.turn_id, run.generation_id),
+                sys.stdout,
+            )
 
     def poll(identity: SessionIdentity) -> tuple[str, str, str]:
         result, duration = sessions.snapshot(identity)
@@ -285,12 +384,13 @@ async () => {
             "Mikrofon-Audio wird während der Aufnahme an OpenAI gesendet (API-Kosten).\n\n"
             "Aufnehmen → nach dem letzten Wort kurz pausieren → Mikrofon stoppen → "
             "**Abschließen & speichern**. Vor einer neuen Aufnahme bitte immer speichern.\n\n"
-            "Gespeichert wird nur das vom Browser empfangene Audio. "
+            "Manual mode speichert die vom Gradio-Mikrofon empfangenen Chunks. "
             "Gradio kann beim Stoppen den letzten noch nicht gesendeten Chunk verwerfen. "
             "Keine Wort-Zeitstempel/SRT, keine automatische Gesprächsantwort.\n\n"
-            "Continuous listening ist experimentell: die derzeitige native Gradio-"
-            "Aufnahme beendet weiterhin nur über Stop; zuverlässige clientseitige VAD-"
-            "Endpoint-Erkennung wird separat untersucht."
+            "Continuous mode uses browser VAD-owned speech segments (16 kHz PCM16, up to 30 s); "
+            "each detected segment is saved and transcribed automatically. In the voice app, "
+            "completed segments also trigger a streamed AI reply. "
+            "Disable this mode to stop listening."
         )
         identity = gr.State(
             value=new_development_session, time_to_live=600, delete_callback=release
@@ -307,15 +407,33 @@ async () => {
         continuous_mode = gr.Checkbox(
             label="Continuous listening (experimental)",
             value=False,
-            info="VAD stops the current turn after speech ends; explicit save remains required.",
+            info=(
+                "Browser VAD submits each detected speech segment for private saving and ASR; "
+                "the voice app also replies automatically."
+            ),
         )
         vad_status = gr.Markdown("VAD is inactive (manual mode).")
+        vad_payload = gr.Textbox(visible=False)
+        vad_submit = gr.Button("Submit VAD segment", visible=False, elem_id="riva-vad-submit")
         discard_button = gr.Button("Ungespeicherte Aufnahme verwerfen")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
         status = gr.Textbox(label="Status", interactive=False)
         playback = gr.Audio(label="Empfangenes Audio anhören", interactive=False, buttons=[])
         details = gr.JSON(label="Gespeicherte Aufnahmedaten")
+        vad_reply_text = gr.Textbox(
+            label="KI-Antwort (VAD)", interactive=False, visible=replies is not None
+        )
+        vad_reply_audio = gr.Audio(
+            label="KI-Stimme (VAD)",
+            streaming=True,
+            autoplay=True,
+            interactive=False,
+            buttons=[],
+            visible=replies is not None,
+        )
+        vad_reply_metrics = gr.JSON(label="Antwortstatus (VAD)", visible=replies is not None)
+        vad_reply_latency = gr.Markdown(visible=replies is not None)
         timer = gr.Timer(0.25)
         group = "asr-input"
         microphone.start_recording(
@@ -347,12 +465,13 @@ async () => {
         continuous_mode.change(
             lambda enabled: (
                 gr.Button(interactive=not enabled),
-                "VAD is enabled in the browser. Speak normally; silence stops the current turn."
+                "VAD is enabled; detected speech segments are saved and transcribed separately."
                 if enabled
                 else "VAD is inactive (manual mode).",
+                gr.Audio(visible=not enabled),
             ),
             inputs=[continuous_mode],
-            outputs=[finish_button, vad_status],
+            outputs=[finish_button, vad_status, microphone],
             api_visibility="private",
         )
         continuous_mode.change(
@@ -363,11 +482,35 @@ async () => {
             queue=False,
             api_visibility="private",
         )
-        microphone.stop_recording(
-            continuous_stopped,
-            inputs=[identity, continuous_mode],
-            outputs=[finish_button],
-            trigger_mode="multiple",
+        vad_submit.click(
+            vad_segment,
+            inputs=[vad_payload, identity],
+            outputs=[
+                partial,
+                final,
+                status,
+                details,
+                vad_reply_text,
+                vad_reply_audio,
+                vad_reply_metrics,
+                vad_reply_latency,
+            ],
+            js="(payload, identity) => [window.rivaVad.activePayload || '', identity]",
+            concurrency_limit=1,
+            api_visibility="private",
+        ).then(
+            None,
+            inputs=[],
+            outputs=[],
+            js=r"""
+() => {
+  if (!window.rivaVad) return;
+  window.rivaVad.activePayload = null;
+  window.rivaVad.busy = false;
+  if (window.rivaVad.submitNext) window.rivaVad.submitNext();
+}
+""",
+            queue=False,
             api_visibility="private",
         )
         finish_event = finish_button.click(

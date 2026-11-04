@@ -576,11 +576,116 @@ def test_manual_mode_remains_manual_and_continuous_endpoint_is_opt_in(
     try:
         sessions.begin(identity)
         assert not sessions.current(identity).stopped
-        assert handlers["continuous_stopped"](identity, False).interactive
+        # The manual microphone path remains independent of the hidden VAD
+        # segment submit event and still uses the explicit stop/save actions.
+        assert "vad_segment" in handlers
         assert not sessions.current(identity).stopped
-        assert handlers["continuous_stopped"](identity, True).interactive
-        assert sessions.current(identity).stopped
     finally:
+        sessions.release(identity)
+
+
+def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    wire = FakeWire()
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), lambda: wire)
+    identity = new_development_session()
+    app = build_asr_app(sessions)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    samples = np.arange(4000, dtype="<i2")
+    payload = json.dumps(
+        {
+            "pcm16_b64": base64.b64encode(samples.tobytes()).decode("ascii"),
+            "started_ms": 123.0,
+        }
+    )
+    try:
+        updates = list(handlers["vad_segment"](payload, identity))
+        assert updates[0][1] == "Heute war ich im Park."
+        assert updates[0][2].startswith("VAD segment saved · 0.25 s")
+        assert updates[0][3]["frames"] == len(samples)
+        result, duration = sessions.snapshot(identity)
+        assert result.status == "completed"
+        assert duration == pytest.approx(0.25)
+        saved = sessions.current(identity).saved
+        assert saved is not None and saved.audio_path.exists()
+        restored, rate = __import__("soundfile").read(saved.audio_path, dtype="int16")
+        assert rate == 16000
+        assert np.array_equal(restored, samples)
+        assert [event["type"] for event in wire.sent].count("input_audio_buffer.commit") == 1
+    finally:
+        sessions.release(identity)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not-json",
+        json.dumps({"pcm16_b64": "!", "started_ms": 0}),
+        json.dumps({"pcm16_b64": base64.b64encode(b"\0\0" * 100).decode(), "started_ms": 0}),
+        json.dumps(
+            {"pcm16_b64": base64.b64encode(b"\0\0" * 2000).decode(), "started_ms": float("nan")}
+        ),
+    ],
+)
+def test_invalid_vad_segments_are_rejected_without_opening_asr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: str
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+
+    def forbidden_factory():
+        pytest.fail("Invalid segment must not connect to ASR")
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), forbidden_factory)
+    identity = new_development_session()
+    app = build_asr_app(sessions)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        output = list(handlers["vad_segment"](payload, identity))
+        assert output[0][2] == "VAD segment rejected or could not be processed"
+        assert sessions.snapshot(identity)[0].status == "ready"
+    finally:
+        sessions.release(identity)
+
+
+def test_voice_vad_segment_flows_through_asr_llm_and_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager, TextPart
+
+    class Provider:
+        def text(self, transcript, config):
+            assert transcript == "Heute war ich im Park."
+            yield TextPart("delta", "Das klingt schön.")
+            yield TextPart("completed", "Das klingt schön.")
+
+        def speech(self, phrase, config):
+            assert phrase == "Das klingt schön."
+            yield b"\0\0" * 12000
+
+    wire = FakeWire()
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), lambda: wire)
+    replies = ReplyManager(ReplyConfig(), Provider)
+    identity = new_development_session()
+    app = build_asr_app(sessions, replies)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    pcm = np.arange(4000, dtype="<i2")
+    payload = json.dumps(
+        {"pcm16_b64": base64.b64encode(pcm.tobytes()).decode("ascii"), "started_ms": 10.0}
+    )
+    try:
+        updates = list(handlers["vad_segment"](payload, identity))
+        assert updates[0][1] == "Heute war ich im Park."
+        assert updates[-1][4] == "Das klingt schön."
+        assert updates[-1][6]["status"] == "completed"
+        assert any(isinstance(update[5], bytes) for update in updates)
+    finally:
+        replies.release(identity)
         sessions.release(identity)
 
 
