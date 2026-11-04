@@ -274,3 +274,90 @@ def test_provider_adapters_use_streaming_no_storage_and_pcm_without_network(monk
     assert list(provider.speech("Hallo.", ReplyConfig())) == [b"\0\0"]
     assert requests[0]["store"] is False
     assert requests[1]["response_format"] == "pcm"
+
+
+def test_cancel_stops_playback_drains_audio_and_persists_stop_metrics(tmp_path):
+    _, saved = saved_turn(tmp_path)
+    provider = FakeReplyProvider(gated=True)
+    run = ReplyRun(saved, "Heute war ich im Park.", ReplyConfig(), provider, 100)
+    try:
+        iterator = run.updates()
+        # Get first chunk
+        text, wav, metrics = next(iterator)
+        assert text or wav is not None or metrics["status"] == "generating"
+
+        # Record a playback event at client timestamp 250 (150ms after started)
+        assert run.record_playback(250) is True
+        assert run.first_playback_ms == 150
+
+        # Now stop/cancel at client timestamp 450 (350ms after started)
+        run.stop(now_ms=450)
+        assert run.status == "cancelled"
+        assert run.stopped_ms == 350
+        assert run.playback_duration_ms == 200  # 350 - 150
+
+        # Subsequent updates must not yield further audio chunks
+        remaining = list(iterator)
+        assert all(wav is None for _, wav, _ in remaining)
+        assert remaining[-1][2]["status"] == "cancelled"
+
+        # Late playback attempts on cancelled run must be rejected
+        assert run.record_playback(600) is False
+
+        # Persistent record must reflect cancelled status and stop metrics
+        data = json.loads((run.root / "reply.json").read_text())
+        assert data["status"] == "cancelled"
+        assert data["stopped_ms"] == 350
+        assert data["playback_duration_ms"] == 200
+    finally:
+        provider.continue_text.set()
+        run.close()
+
+
+def test_cancelled_generation_can_be_retried_for_same_turn(tmp_path):
+    identity, saved = saved_turn(tmp_path)
+    provider = FakeReplyProvider()
+    manager = ReplyManager(ReplyConfig(), lambda: provider)
+    try:
+        first, created = manager.start(identity, saved, "Test.", 0)
+        assert created
+        first.stop(now_ms=100)
+        assert first.status == "cancelled"
+
+        # Retrying the same turn after cancellation must create a fresh generation
+        second, created = manager.start(identity, saved, "Test.", 200)
+        assert created
+        assert second is not first
+        assert second.generation_id != first.generation_id
+    finally:
+        manager.release(identity)
+
+
+def test_format_metrics_with_cancellation_and_playback_duration():
+    from riva.experiments.voice_reply import format_metrics
+
+    # Cancelled with prior playback
+    text = format_metrics(
+        {
+            "status": "cancelled",
+            "first_text_ms": 1000.0,
+            "first_server_audio_ms": 2000.0,
+            "first_browser_play_event_ms": 2500.0,
+            "stopped_ms": 4000.0,
+            "playback_duration_ms": 1500.0,
+            "audio_seconds_produced": 5.0,
+        }
+    )
+    assert "**Status:** abgebrochen" in text
+    assert "Gehört vor Abbruch: 1.50 s" in text
+
+    # Cancelled before any playback started
+    stopped_early = format_metrics(
+        {
+            "status": "cancelled",
+            "first_text_ms": 1000.0,
+            "stopped_ms": 1500.0,
+        }
+    )
+    assert "**Status:** abgebrochen" in stopped_early
+    assert "Abbruch nach: 1.50 s" in stopped_early

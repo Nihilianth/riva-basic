@@ -188,6 +188,8 @@ class ReplyRun:
         self.first_playback_ms: float | None = None
         self.playback_signal_received: bool = False
         self.playback_signal_ms: float | None = None
+        self.stopped_ms: float | None = None
+        self.playback_duration_ms: float | None = None
         self.producer = threading.Thread(target=self._text, args=(transcript,), daemon=True)
         self.synthesizer = threading.Thread(target=self._speech, daemon=True)
         self.producer.start()
@@ -326,6 +328,8 @@ class ReplyRun:
                 "first_browser_play_event_ms": self.first_playback_ms,
                 "client_request_started_ms": self.client_started_ms,
                 "audio_seconds_produced": len(self.pcm) / (RATE * 2),
+                "stopped_ms": self.stopped_ms,
+                "playback_duration_ms": self.playback_duration_ms,
             }
 
     def updates(self) -> Iterator[tuple[str, bytes | None, dict[str, object]]]:
@@ -340,12 +344,15 @@ class ReplyRun:
                     pcm = self.audio.get(timeout=0.05)
                 except queue.Empty:
                     pcm = None
+                if self.cancelled.is_set():
+                    break
                 with self.lock:
                     text = self.text
                 if pcm is not None or text != last_text:
                     yield text, pcm_wav(pcm) if pcm else None, self.snapshot()
                     last_text = text
-            self.done.wait(timeout=2)
+            if not self.cancelled.is_set():
+                self.done.wait(timeout=2)
             with self.lock:
                 text = self.text
             yield text, None, self.snapshot()
@@ -358,7 +365,7 @@ class ReplyRun:
         if not math.isfinite(elapsed) or not 0 <= elapsed <= 180000:
             return False
         with self.lock:
-            if self.first_playback_ms is not None or not self.pcm:
+            if self.first_playback_ms is not None or not self.pcm or self.status == "cancelled":
                 return False
             self.first_playback_ms = elapsed
         self.persist()
@@ -400,13 +407,35 @@ class ReplyRun:
                 self.root / "reply.json", json.dumps(record, ensure_ascii=False, indent=2) + "\n"
             )
 
-    def close(self) -> None:
+    def stop(self, now_ms: float | None = None) -> None:
         with self.lock:
-            if self.status == "generating":
+            if self.status in ("generating", "completed"):
                 self.status = "cancelled"
+            while not self.audio.empty():
+                with suppress(queue.Empty):
+                    self.audio.get_nowait()
+            while not self.phrases.empty():
+                with suppress(queue.Empty):
+                    self.phrases.get_nowait()
+            if now_ms is not None:
+                elapsed = now_ms - self.client_started_ms
+                if math.isfinite(elapsed) and elapsed >= 0:
+                    self.stopped_ms = elapsed
+                    if self.first_playback_ms is not None:
+                        self.playback_duration_ms = max(0.0, elapsed - self.first_playback_ms)
+            elif self.stopped_ms is None:
+                server_elapsed = (time.monotonic() - self.started) * 1000
+                self.stopped_ms = server_elapsed
+                if self.first_playback_ms is not None:
+                    self.playback_duration_ms = max(0.0, server_elapsed - self.first_playback_ms)
         self.cancelled.set()
+        with suppress(OSError):
+            self.persist()
         self.producer.join(timeout=1)
         self.synthesizer.join(timeout=1)
+
+    def close(self) -> None:
+        self.stop()
 
 
 class ReplyManager:
@@ -434,7 +463,10 @@ class ReplyManager:
         with self.lock:
             old = self.runs.get(identity.session_id)
             if old is not None:
-                if old.saved.metadata.turn_id == saved.metadata.turn_id:
+                if (
+                    old.saved.metadata.turn_id == saved.metadata.turn_id
+                    and old.status != "cancelled"
+                ):
                     return old, False
                 old.close()
             run = ReplyRun(saved, transcript, self.config, self.factory(), client_started_ms)
@@ -465,6 +497,17 @@ class ReplyManager:
         run = self.find(generation_id)
         if run is not None:
             run.note_playback_signal()
+
+    def stop(self, identity: SessionIdentity, now_ms: float | None = None) -> ReplyRun | None:
+        with self.lock:
+            run = self.runs.get(identity.session_id)
+            if run is not None:
+                run.stop(now_ms)
+                return run
+        return None
+
+    def cancel(self, identity: SessionIdentity, now_ms: float | None = None) -> ReplyRun | None:
+        return self.stop(identity, now_ms)
 
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:

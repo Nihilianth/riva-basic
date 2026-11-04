@@ -562,3 +562,59 @@ def test_failed_asr_never_starts_reply_provider(
     finally:
         replies.release(identity)
         sessions.release(identity)
+
+
+def test_voice_ui_stop_button_cancels_playback_and_resets_controls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager, TextPart
+
+    class Provider:
+        def text(self, transcript, config):
+            yield TextPart("delta", "Hallo.")
+            yield TextPart("completed", "Hallo.")
+
+        def speech(self, phrase, config):
+            yield b"\0\0" * 12000
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    replies = ReplyManager(ReplyConfig(), Provider)
+    identity = new_development_session()
+    app = build_asr_app(sessions, replies)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        sessions.begin(identity)
+        sessions.append(audio(), identity)
+        sessions.current(identity).stopped = True
+        sessions.finish(identity)
+        assert handlers["enable"](identity).interactive
+
+        # Start reply
+        reply_iter = handlers["reply"](identity, 100)
+        first_step = next(reply_iter)
+        assert not first_step[4].interactive  # button disabled
+        assert first_step[5].interactive  # stop_button enabled
+
+        # Stop via stop_reply handler
+        stop_out = handlers["stop_reply"](identity, 400)
+        assert stop_out[1] is None  # speech audio cleared
+        assert stop_out[2]["status"] == "cancelled"
+        assert "abgebrochen" in stop_out[3]
+        assert stop_out[4].interactive  # button re-enabled
+        assert not stop_out[5].interactive  # stop_button disabled
+
+        # Late playback attempts should not be recorded
+        play_out = handlers["played"](identity, {}, 500)
+        assert play_out[0]["first_browser_play_event_ms"] is None
+
+        # Check telemetry
+        logged = capsys.readouterr().out
+        assert '"name": "playback.started"' not in logged
+        assert '"name": "playback.stopped"' in logged
+    finally:
+        replies.release(identity)
+        sessions.release(identity)

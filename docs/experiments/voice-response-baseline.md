@@ -1,7 +1,7 @@
 # Manual voice response baseline
 
-Date: 2026-10-22. Beads: `riva-0jw.3`.
-Status: implemented and tested offline; live LLM/TTS and browser playback verification pending.
+Date: 2026-10-22. Beads: `riva-0jw.3`, `riva-0jw.4`.
+Status: implemented and tested offline; live LLM/TTS, browser playback and cancellation verification pending.
 
 ## Scope and workflow
 
@@ -73,6 +73,46 @@ means it is not proof of first audible sound. Measure audible latency separately
 with shutdown January 6, 2027. `riva-ddc` tracks migration to a supported workflow
 while preserving the separate text orchestration/TTS boundary and checking fidelity.
 The recommended Realtime model cannot simply be supplied to `/v1/audio/speech`.
+
+## Playback cancellation and stale generation handling (riva-0jw.4)
+
+### Mechanics
+- **Stop button and queue bypass:** An explicit **Wiedergabe abbrechen** button triggers
+  cancellation without queuing (`queue=False`), avoiding head-of-line blocking behind
+  the streaming reply generator. The event listener specifies `cancels=[reply_event]` to
+  instruct Gradio's queue runner to terminate client delivery immediately.
+- **Client-side audio silencing:** Gradio's streaming `gr.Audio` component does not offer a
+  native JavaScript API to flush buffered audio frames. On Stop click, frontend JavaScript
+  synchronously pauses all `<audio>` elements, sets `currentTime = 0`, clears `src`, and reloads
+  them (`load()`). This silences playback instantly without waiting for a server round-trip.
+- **Active generation invalidation:** The frontend observer drops `window.rivaCurrentGeneration`
+  and sets `rivaGenerationRecorded = true`. Any late audio chunks or delayed `play` events from
+  cancelled runs are discarded and not attributed.
+- **Worker termination and queue draining:** On the backend, `ReplyManager.stop()` sets
+  `run.cancelled`, drains all buffered phrases and audio chunks from `run.phrases` and
+  `run.audio`, and persists the run with `status="cancelled"`. Generator loops exit promptly
+  without yielding stale audio.
+- **Retry semantics:** Unlike completed replies (which double-click idempotency preserves),
+  a cancelled run is discarded if the user presses **Antwort erzeugen** again for the same turn,
+  initiating a fresh generation with a new UUID.
+
+### Latency and playback recording
+- `stopped_ms`: client elapsed time from request start to Stop click.
+- `playback_duration_ms`: duration of audible playback before interruption
+  (`stopped_ms - first_browser_play_event_ms`). If cancelled prior to playback, remains null.
+- `playback.stopped` is logged to the structured event stream with session, turn, generation,
+  and playback duration.
+
+### Recorded native Gradio limitations
+1. **No native audio stream flush/reset:** `gr.Audio(streaming=True)` continues playing any
+   chunks already buffered in the browser even after server-side cancellation. Explicit DOM-level
+   audio element unloading is necessary to silence output.
+2. **Cooperative generator exit:** Gradio queue cancellation marks the job dead on the server
+   and ceases SSE transport, but the underlying Python generator remains alive until its next
+   iteration or until explicit cooperative thread termination checks the cancel flag.
+3. **Play signal unreliability:** Streamed audio does not reliably fire the standard browser
+   `play` event under Gradio's player wrapper across all browsers; server-side frame generation
+   timing plus explicit client stop timestamps provide the only consistent bounds.
 
 ## Offline evidence and live verification
 
