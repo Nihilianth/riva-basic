@@ -1,6 +1,7 @@
 """Small, allowlisted JSON event records without free-text conversation content."""
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -20,6 +21,11 @@ class EventName(StrEnum):
     PLAYBACK_STARTED = "playback.started"
     PLAYBACK_STOPPED = "playback.stopped"
     PROVIDER_FAILED = "provider.failed"
+    BROWSER_HLS_ERROR = "browser.hls_error"
+    BROWSER_AUDIO = "browser.audio"
+
+
+DETAIL_TOKEN = re.compile(r"[A-Za-z0-9_.:-]{1,48}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,14 +37,20 @@ class Event:
     turn_id: str | None = None
     generation_id: str | None = None
     duration_ms: float | None = None
+    detail: str | None = None  # short token such as "levelEmptyError"; never free text
 
     def __post_init__(self) -> None:
+        if self.detail is not None and not DETAIL_TOKEN.fullmatch(self.detail):
+            raise ValueError("detail must be a short identifier token")
         if self.duration_ms is not None and self.duration_ms < 0:
             raise ValueError("duration_ms must be non-negative")
 
 
 def write_event(event: Event, stream: TextIO) -> None:
     """Write one JSON line. The caller controls access and retention of the sink."""
-    record = {"timestamp": datetime.now(UTC).isoformat(), **asdict(event)}
+    fields = asdict(event)
+    if fields["detail"] is None:
+        del fields["detail"]
+    record = {"timestamp": datetime.now(UTC).isoformat(), **fields}
     stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
     stream.flush()

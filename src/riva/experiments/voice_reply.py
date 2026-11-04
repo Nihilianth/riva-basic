@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from fastapi import Request
+
 from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
 from riva.audio.transcription import AsrConfig
@@ -376,7 +378,39 @@ if (!window.rivaPlaybackInstalled) {
     const match = document.body.innerText.match(/"generation_id":\s*"([a-f0-9]+)"/);
     if (match) window.rivaCurrentGeneration = match[1];
   }, 250);
-  const note = (name) => { if (window.rivaVadStage) window.rivaVadStage(name); };
+  const reported = new Map();
+  let reportCount = 0;
+  // Allowlisted diagnostics only: an event kind plus a short identifier token.
+  const report = (event, detail) => {
+    const token = String(detail || '').replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 48);
+    if (!token || reportCount >= 60) return;
+    const key = event + '/' + token;
+    const now = performance.now();
+    if (reported.has(key) && now - reported.get(key) < 2000) return;
+    reported.set(key, now);
+    reportCount += 1;
+    fetch('/riva/browser_event', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event: event, detail: token})
+    }).catch(() => {});
+  };
+  const note = (name) => {
+    if (window.rivaVadStage) window.rivaVadStage(name);
+    report('audio', name.replace(/^reply audio: /, '').replace(/ /g, '_'));
+  };
+  // hls.js (inside Gradio) logs failures via console.error('HLS error:', {type, details, fatal}).
+  for (const level of ['error', 'warn']) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      const info = args[0] === 'HLS error:' ? args[1] : null;
+      if (info && typeof info === 'object') {
+        report('hls_error', String(info.details) + (info.fatal ? ':fatal' : ''));
+        if (window.rivaVadStage) window.rivaVadStage('hls ' + String(info.details).slice(0, 40));
+      }
+      original(...args);
+    };
+  }
   // Status-only probe of Gradio's HLS stream requests (no URLs or bodies are recorded).
   let lastStreamNote = '';
   const streamNote = (url, status) => {
@@ -481,11 +515,24 @@ if (!window.rivaPlaybackInstalled) {
 }
 """
     import uvicorn
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI
     from gradio.routes import mount_gradio_app
 
     demo.queue(max_size=64)
     api = FastAPI()
+
+    browser_events = {"hls_error": EventName.BROWSER_HLS_ERROR, "audio": EventName.BROWSER_AUDIO}
+
+    @api.post("/riva/browser_event")
+    async def record_browser_event(request: Request) -> dict[str, bool]:
+        """Log an allowlisted browser diagnostic: event kind plus a short token."""
+        try:
+            data = await request.json()
+            name = browser_events[data["event"]]
+            write_event(Event(name, "browser", detail=data["detail"]), sys.stdout)
+        except (ValueError, KeyError, TypeError):
+            return {"recorded": False}
+        return {"recorded": True}
 
     @api.post("/riva/playback")
     async def record_browser_playback(request: Request) -> dict[str, bool]:

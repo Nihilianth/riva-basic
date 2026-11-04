@@ -884,3 +884,32 @@ def test_vad_submit_button_stays_in_dom_for_browser_click(tmp_path: Path) -> Non
     ]
     assert len(buttons) == 1
     assert buttons[0].visible == "hidden"
+
+
+def test_vad_updates_leave_streaming_audio_untouched_until_real_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A None on a streaming Audio output opens an empty HLS playlist (hls.js fatal)."""
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+
+    from riva.audio.replies import ReplyConfig, ReplyManager
+    from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), SyntheticWire)
+    replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    identity = new_development_session()
+    app = build_vad_app(sessions, replies, test_mode=True)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        updates = list(handlers["synthetic_pipeline"](identity))
+        first_audio = next(i for i, u in enumerate(updates) if isinstance(u[5], bytes))
+        assert first_audio > 0
+        # Before audio: a prop-update (skip) marker, never None.
+        assert all(u[5] is not None for u in updates[:first_audio])
+        assert all(not isinstance(u[5], bytes) and u[5] is not None for u in updates[:first_audio])
+        # After audio exists, the closing update sends None to finalize the stream.
+        assert updates[-1][5] is None
+    finally:
+        replies.release(identity)
+        sessions.release(identity)

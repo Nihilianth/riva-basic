@@ -180,6 +180,10 @@ def vad_segment_updates(
         )
         sessions.update_vad_diagnostics(identity, timeline)
 
+    from gradio import skip
+
+    audio_started = False
+
     def update(
         partial: str = "",
         final: str = "",
@@ -189,13 +193,19 @@ def vad_segment_updates(
         audio: bytes | None = None,
         metrics: dict[str, Any] | None = None,
     ) -> tuple[Any, ...]:
+        # A None on a streaming output opens an empty HLS stream whose playlist has no
+        # segments yet; the browser's hls.js treats that as fatal. Leave the output
+        # untouched until real audio exists, then send None only to close the stream.
+        nonlocal audio_started
+        audio_started = audio_started or audio is not None
+        audio_value: Any = audio if audio is not None else (None if audio_started else skip())
         return (
             partial,
             final,
             status,
             metadata or {},
             reply,
-            audio,
+            audio_value,
             metrics or {},
             "",
             list(timeline),

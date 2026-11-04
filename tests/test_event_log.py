@@ -37,3 +37,14 @@ def test_nonfinite_duration_cannot_produce_invalid_json(duration: float) -> None
             Event(EventName.PROVIDER_FAILED, "synthetic-session", duration_ms=duration),
             io.StringIO(),
         )
+
+
+def test_detail_is_a_short_token_and_only_present_when_set() -> None:
+    output = io.StringIO()
+    write_event(
+        Event(EventName.BROWSER_HLS_ERROR, "browser", detail="levelEmptyError:fatal"), output
+    )
+    assert json.loads(output.getvalue())["detail"] == "levelEmptyError:fatal"
+    for bad in ("two words", "a" * 49, "", "text\nwith newline"):
+        with pytest.raises(ValueError, match="identifier token"):
+            Event(EventName.BROWSER_AUDIO, "browser", detail=bad)
