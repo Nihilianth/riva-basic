@@ -1000,10 +1000,12 @@ def test_newer_speech_holds_the_transcript_and_the_next_turn_merges_it(
         assert seen == [] and replies.current(identity) is None
         assert "reply.held" in [row["stage"] for row in first[-1][7]]
         assert "wartet" in first[-1][2]
+        assert first[-1][8] == "(wartet auf weitere Sprache) Synthetischer Testlauf."
         # That later speech ended and was submitted: one LLM call over both transcripts.
         handlers["vad_speech"](json.dumps({"kind": "end", "at": 9000.0}), identity)
         second = list(handlers["vad_segment"](_segment(9000.0), identity))
         assert seen == ["Synthetischer Testlauf. Synthetischer Testlauf."]
+        assert second[-1][8] == "Synthetischer Testlauf. Synthetischer Testlauf."  # shown in UI
         assert second[-1][5]["status"] == "completed"
         out = capsys.readouterr().out
         assert "response.held" in out and out.count("response.started") == 1

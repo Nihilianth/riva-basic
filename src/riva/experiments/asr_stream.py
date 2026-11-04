@@ -113,6 +113,11 @@ class AsrSessions:
             state = self.speech.setdefault(identity.session_id, SpeechState())
             state.held = [*pieces, *state.held] if front else [*state.held, *pieces]
 
+    def held_preview(self, identity: SessionIdentity) -> list[str]:
+        with self.lock:
+            state = self.speech.get(identity.session_id)
+            return list(state.held) if state else []
+
     def take_held(self, identity: SessionIdentity) -> list[str]:
         with self.lock:
             state = self.speech.get(identity.session_id)
@@ -244,6 +249,10 @@ def vad_segment_updates(
         )
         sessions.update_vad_diagnostics(identity, timeline)
 
+    from gradio import skip
+
+    sent_to_llm: str | None = None  # shown in the UI only; never logged
+
     def update(
         partial: str = "",
         final: str = "",
@@ -261,6 +270,7 @@ def vad_segment_updates(
             metrics or {},
             str((metrics or {}).get("generation_id", "")),
             list(timeline),
+            sent_to_llm if sent_to_llm is not None else skip(),
         )
 
     segment_end_ms: float | None = None
@@ -390,6 +400,9 @@ def vad_segment_updates(
             # The user is still talking (or talked again): answer everything together later.
             sessions.hold(identity, [result.text])
             held_now = True
+            sent_to_llm = "(wartet auf weitere Sprache) " + merge_transcripts(
+                sessions.held_preview(identity)
+            )
             write_event(
                 Event(EventName.RESPONSE_HELD, identity.session_id, saved.metadata.turn_id),
                 sys.stdout,
@@ -397,13 +410,10 @@ def vad_segment_updates(
             detail += " · wartet auf weitere Sprache"
         else:
             previous = sessions.take_held(identity)
+            merged = merge_transcripts([*previous, result.text])
+            sent_to_llm = merged
             try:
-                run, created = replies.start(
-                    identity,
-                    saved,
-                    merge_transcripts([*previous, result.text]),
-                    float(started_ms),
-                )
+                run, created = replies.start(identity, saved, merged, float(started_ms))
             except (ValueError, OSError):
                 sessions.hold(identity, [*previous, result.text], front=True)
                 run = None
@@ -851,7 +861,12 @@ def build_vad_app(
         speech_payload = gr.Textbox(visible=False)
         speech = gr.Button("Speech event", visible="hidden", elem_id="riva-vad-speech")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
-        final = gr.Textbox(label="Endgültige Transkription", interactive=False)
+        final = gr.Textbox(label="Endgültige Transkription (letztes Segment)", interactive=False)
+        llm_input = gr.Textbox(
+            label="An das LLM gesendeter Text (zusammengeführt)",
+            interactive=False,
+            visible=replies is not None,
+        )
         status = gr.Textbox(label="Segmentstatus", interactive=False)
         details = gr.JSON(label="Gespeicherte Segmentdaten")
         reply_text = gr.Textbox(label="KI-Antwort", interactive=False, visible=replies is not None)
@@ -877,6 +892,7 @@ def build_vad_app(
                 reply_metrics,
                 generation,
                 diagnostics,
+                llm_input,
             ],
             js="(payload, identity) => [window.rivaVad.activePayload || '', identity]",
             concurrency_limit=1,
@@ -928,6 +944,7 @@ def build_vad_app(
                     reply_metrics,
                     generation,
                     diagnostics,
+                    llm_input,
                 ],
                 concurrency_limit=1,
                 api_visibility="private",
