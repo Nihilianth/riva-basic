@@ -180,34 +180,22 @@ def vad_segment_updates(
         )
         sessions.update_vad_diagnostics(identity, timeline)
 
-    from gradio import skip
-
-    audio_started = False
-
     def update(
         partial: str = "",
         final: str = "",
         status: str = "",
         metadata: dict[str, Any] | None = None,
         reply: str = "",
-        audio: bytes | None = None,
         metrics: dict[str, Any] | None = None,
     ) -> tuple[Any, ...]:
-        # A None on a streaming output opens an empty HLS stream whose playlist has no
-        # segments yet; the browser's hls.js treats that as fatal. Leave the output
-        # untouched until real audio exists, then send None only to close the stream.
-        nonlocal audio_started
-        audio_started = audio_started or audio is not None
-        audio_value: Any = audio if audio is not None else (None if audio_started else skip())
         return (
             partial,
             final,
             status,
             metadata or {},
             reply,
-            audio_value,
             metrics or {},
-            "",
+            str((metrics or {}).get("generation_id", "")),
             list(timeline),
         )
 
@@ -346,14 +334,13 @@ def vad_segment_updates(
             ),
             sys.stdout,
         )
-        for reply_text, wav, metrics in run.updates():
+        for reply_text, _wav, metrics in run.updates():
             yield update(
                 result.partial,
                 result.text or "",
                 f"VAD segment saved · {duration:.2f} s · reply {metrics['status']}",
                 metadata,
                 reply_text,
-                wav,
                 metrics,
             )
         event_name = (
@@ -370,7 +357,6 @@ def vad_segment_updates(
             detail + f" · reply {run.status}",
             metadata,
             run.text,
-            None,
             run.snapshot(),
         )
 
@@ -614,6 +600,7 @@ async (enabled) => {
       },
       onSpeechEnd: (audio) => {
         window.rivaVad.speaking = false;
+        if (window.rivaDropReplyAudio) window.rivaDropReplyAudio();
         if (!window.rivaVad.enabled) return;
         if (window.rivaVad.pending.length >= 2) {
           stage("busy: pending segment limit reached");
@@ -733,16 +720,9 @@ def build_vad_app(
         status = gr.Textbox(label="Segmentstatus", interactive=False)
         details = gr.JSON(label="Gespeicherte Segmentdaten")
         reply_text = gr.Textbox(label="KI-Antwort", interactive=False, visible=replies is not None)
-        reply_audio = gr.Audio(
-            label="KI-Stimme",
-            streaming=True,
-            autoplay=True,
-            interactive=False,
-            buttons=[],
-            visible=replies is not None,
-        )
         reply_metrics = gr.JSON(label="Antwortstatus", visible=replies is not None)
-        reply_latency = gr.Markdown(visible=replies is not None)
+        # Opaque id the page's Web Audio player reads to fetch /riva/reply_audio/<id>.
+        generation = gr.Textbox(visible="hidden", elem_id="riva-generation-id")
         diagnostic_timer = gr.Timer(0.25)
         if test_mode:
             gr.Markdown(
@@ -759,9 +739,8 @@ def build_vad_app(
                 status,
                 details,
                 reply_text,
-                reply_audio,
                 reply_metrics,
-                reply_latency,
+                generation,
                 diagnostics,
             ],
             js="(payload, identity) => [window.rivaVad.activePayload || '', identity]",
@@ -800,9 +779,8 @@ def build_vad_app(
                     status,
                     details,
                     reply_text,
-                    reply_audio,
                     reply_metrics,
-                    reply_latency,
+                    generation,
                     diagnostics,
                 ],
                 concurrency_limit=1,

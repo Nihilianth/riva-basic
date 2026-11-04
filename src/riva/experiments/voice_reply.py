@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
+import re
 import sys
-from collections.abc import Iterator
+import time
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
@@ -21,6 +25,8 @@ from riva.experiments.audio_capture import prepare_environment
 if TYPE_CHECKING:
     import gradio as gr
     from gradio.events import Dependency
+
+GENERATION_ID = re.compile(r"[a-f0-9]{32}")
 
 STATUS_LABELS = {
     "generating": "läuft",
@@ -313,6 +319,33 @@ def add_reply_controls(
     )
 
 
+def add_reply_audio_route(api: FastAPI, replies: ReplyManager) -> None:
+    @api.get("/riva/reply_audio/{generation_id}")
+    async def reply_audio(generation_id: str) -> StreamingResponse:
+        """Stream a run's raw 24 kHz mono s16le PCM as it is produced."""
+        run = replies.find(generation_id) if GENERATION_ID.fullmatch(generation_id) else None
+        if run is None:
+            raise HTTPException(status_code=404)
+        deadline = run.started + run.config.max_seconds + 5
+
+        async def chunks() -> AsyncIterator[bytes]:
+            offset = 0
+            while time.monotonic() < deadline:
+                data, finished = run.read_audio(offset)
+                if data:
+                    offset += len(data)
+                    yield data
+                if finished:
+                    return
+                await asyncio.sleep(0.04)
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store"},
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -352,41 +385,15 @@ def main() -> None:
 window.rivaPlaybackInstalled = window.rivaPlaybackInstalled || false;
 if (!window.rivaPlaybackInstalled) {
   window.rivaPlaybackInstalled = true;
-  window.rivaCurrentGeneration = null;
-  window.rivaGenerationRecorded = false;
-  document.addEventListener('click', (event) => {
-    const button = event.target && event.target.closest ? event.target.closest('button') : null;
-    if (button && button.textContent && button.textContent.includes('Antwort erzeugen')) {
-      window.rivaGenerationRecorded = false;
-      window.rivaCurrentGeneration = null;
-    }
-    if (button && button.textContent && button.textContent.includes('Wiedergabe abbrechen')) {
-      window.rivaGenerationRecorded = true;
-      window.rivaCurrentGeneration = null;
-      document.querySelectorAll('audio').forEach((audio) => {
-        try {
-          audio.pause();
-          audio.currentTime = 0;
-          audio.removeAttribute('src');
-          audio.load();
-        } catch (_) {}
-      });
-    }
-  }, true);
-  setInterval(() => {
-    if (window.rivaGenerationRecorded) return;
-    const match = document.body.innerText.match(/"generation_id":\s*"([a-f0-9]+)"/);
-    if (match) window.rivaCurrentGeneration = match[1];
-  }, 250);
   const reported = new Map();
   let reportCount = 0;
   // Allowlisted diagnostics only: an event kind plus a short identifier token.
   const report = (event, detail) => {
     const token = String(detail || '').replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 48);
-    if (!token || reportCount >= 60) return;
+    if (!token || reportCount >= 200) return;
     const key = event + '/' + token;
     const now = performance.now();
-    if (reported.has(key) && now - reported.get(key) < 2000) return;
+    if (reported.has(key) && now - reported.get(key) < 500) return;
     reported.set(key, now);
     reportCount += 1;
     fetch('/riva/browser_event', {
@@ -396,126 +403,134 @@ if (!window.rivaPlaybackInstalled) {
     }).catch(() => {});
   };
   const note = (name) => {
-    if (window.rivaVadStage) window.rivaVadStage(name);
-    report('audio', name.replace(/^reply audio: /, '').replace(/ /g, '_'));
-  };
-  // hls.js (inside Gradio) logs failures via console.error('HLS error:', {type, details, fatal}).
-  for (const level of ['error', 'warn']) {
-    const original = console[level].bind(console);
-    console[level] = (...args) => {
-      const info = args[0] === 'HLS error:' ? args[1] : null;
-      if (info && typeof info === 'object') {
-        report('hls_error', String(info.details) + (info.fatal ? ':fatal' : ''));
-        if (window.rivaVadStage) window.rivaVadStage('hls ' + String(info.details).slice(0, 40));
-      }
-      original(...args);
-    };
-  }
-  // Status-only probe of Gradio's HLS stream requests (no URLs or bodies are recorded).
-  let lastStreamNote = '';
-  const streamNote = (url, status) => {
-    const text = String(url);
-    if (!text.includes('/gradio_api/stream/') || status === 200) return;
-    const kind = text.includes('playlist.m3u8') ? 'playlist' : 'segment';
-    const message = 'stream ' + kind + ' HTTP ' + status;
-    if (message === lastStreamNote) return;
-    lastStreamNote = message;
-    note(message);
-  };
-  const nativeOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this.addEventListener('loadend', () => streamNote(url, this.status));
-    return nativeOpen.call(this, method, url, ...rest);
-  };
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, init) => {
-    const url = typeof input === 'string' ? input : (input && input.url) || '';
-    return nativeFetch(input, init).then(
-      (response) => { streamNote(url, response.status); return response; },
-      (error) => { streamNote(url, 0); throw error; }
-    );
+    if (window.rivaVadStage) window.rivaVadStage('audio ' + name);
+    report('audio', name);
   };
   const userSpeaking = () => Boolean(window.rivaVad && window.rivaVad.speaking);
-  // Barge-in: never play (or keep playing) a reply while VAD hears the user.
-  window.rivaHoldReplyAudio = () => {
-    document.querySelectorAll('audio').forEach((audio) => {
-      if (audio.paused) return;
-      audio.dataset.rivaHeld = '1';
-      try { audio.pause(); } catch (_) {}
-      note('reply audio: paused (user speaking)');
-    });
+
+  // Reply playback: raw 24 kHz mono s16le PCM from /riva/reply_audio/<id>, played with Web
+  // Audio. Gradio's HLS <audio> element is deliberately not used for VAD replies.
+  const RATE = 24000;
+  let ctx = null;
+  let current = null;
+  const ensureContext = () => {
+    if (!ctx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      try { ctx = new Ctor({sampleRate: RATE}); } catch (_) { ctx = new Ctor(); }
+      ctx.onstatechange = () => note('ctx_' + ctx.state);
+      note('ctx_' + ctx.state);
+    }
+    return ctx;
   };
-  window.rivaResumeReplyAudio = () => {
-    document.querySelectorAll('audio').forEach((audio) => {
-      if (audio.dataset.rivaHeld !== '1') return;
-      audio.dataset.rivaHeld = '';
-      audio.play().catch(() => {});
-      note('reply audio: resumed (misfire)');
-    });
+  const unlock = () => {
+    const c = ensureContext();
+    if (c.state === 'suspended' && !(current && current.suspended)) c.resume().catch(() => {});
   };
-  const watchStream = (audio) => {
-    const src = audio.currentSrc || audio.getAttribute('src') || '';
-    if (!src || audio.dataset.rivaSrc === src) return;
-    audio.dataset.rivaSrc = src;
-    note('reply audio: new stream');
-    // Gradio's autoplay only fires for the first stream; start each new reply explicitly.
-    const start = () => {
-      if (userSpeaking()) {
-        audio.dataset.rivaHeld = '1';
-        try { audio.pause(); } catch (_) {}
-        note('reply audio: held (user speaking)');
-        return;
-      }
-      audio.play().then(
-        () => note('reply audio: playing'),
-        (error) => {
-          const raw = String((error && error.name) || '');
-          note('reply audio: play blocked ' + raw.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40));
-        }
-      );
+  ['pointerdown', 'keydown', 'touchstart'].forEach((name) =>
+    document.addEventListener(name, unlock, {capture: true, passive: true}));
+
+  const stopCurrent = (reason) => {
+    const run = current;
+    if (!run) return;
+    current = null;
+    run.aborted = true;
+    try { run.abort.abort(); } catch (_) {}
+    run.sources.forEach((source) => { try { source.stop(); } catch (_) {} });
+    run.sources.clear();
+    note(reason);
+  };
+  const schedule = (run, bytes) => {
+    const count = bytes.length / 2;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const buffer = ctx.createBuffer(1, count, RATE);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < count; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    const when = Math.max(run.next, ctx.currentTime + 0.08);
+    source.start(when);
+    run.next = when + buffer.duration;
+    run.sources.add(source);
+    source.onended = () => {
+      run.sources.delete(source);
+      if (run.finished && !run.sources.size && !run.aborted) note('ended');
     };
-    if (audio.readyState >= 2) start();
-    else audio.addEventListener('canplay', start, {once: true});
+    if (!run.started) {
+      run.started = true;
+      note('first_chunk');
+      fetch('/riva/playback', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({generation_id: run.id, now_ms: performance.now()})
+      }).catch(() => {});
+    }
   };
-  const bindAudio = () => {
-    document.querySelectorAll('audio').forEach((audio) => {
-      watchStream(audio);
-      if (audio.dataset.rivaEndBound !== '1') {
-        audio.dataset.rivaEndBound = '1';
-        audio.addEventListener('ended', () => note('reply audio: ended'));
-        audio.addEventListener('play', () => {
-          if (!userSpeaking()) return;
-          audio.dataset.rivaHeld = '1';
-          try { audio.pause(); } catch (_) {}
-          note('reply audio: held (user speaking)');
-        });
-        audio.addEventListener('error', () => note('reply audio: element error'));
-      }
-      if (audio.dataset.rivaPlayBound === '1') return;
-      audio.dataset.rivaPlayBound = '1';
-      audio.addEventListener('play', () => {
-        if (window.rivaGenerationRecorded) return;
-        const generationId = window.rivaCurrentGeneration;
-        if (!generationId) {
-          try {
-            audio.pause();
-          } catch (_) {}
-          return;
+  const play = async (id) => {
+    stopCurrent('replaced');
+    if (userSpeaking()) { note('dropped_user_speaking'); return; }
+    ensureContext();
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (_) {} }
+    const run = {id: id, abort: new AbortController(), sources: new Set(), next: 0,
+                 started: false, finished: false, aborted: false, suspended: false};
+    current = run;
+    note('stream_started');
+    try {
+      const response = await fetch('/riva/reply_audio/' + id, {
+        signal: run.abort.signal, cache: 'no-store'});
+      if (!response.ok || !response.body) { note('fetch_http_' + response.status); return; }
+      const reader = response.body.getReader();
+      let carry = new Uint8Array(0);
+      for (;;) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        let bytes = value;
+        if (carry.length) {
+          const merged = new Uint8Array(carry.length + bytes.length);
+          merged.set(carry);
+          merged.set(bytes, carry.length);
+          bytes = merged;
         }
-        window.rivaGenerationRecorded = true;
-        fetch('/riva/playback', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({generation_id: generationId, now_ms: performance.now()})
-        }).catch(() => {});
-      });
-    });
+        const usable = bytes.length - (bytes.length % 2);
+        carry = bytes.slice(usable);
+        if (usable && !run.aborted) schedule(run, bytes.subarray(0, usable));
+      }
+      run.finished = true;
+      if (!run.sources.size && !run.aborted) note('ended');
+    } catch (error) {
+      if (!run.aborted) note('stream_error_' + String((error && error.name) || 'Error'));
+    }
   };
-  setInterval(bindAudio, 250);
+
+  // Barge-in, driven by the browser VAD state (see VAD_BROWSER_JS in asr_stream.py).
+  window.rivaHoldReplyAudio = () => {
+    if (!current || !ctx || ctx.state !== 'running') return;
+    current.suspended = true;
+    ctx.suspend().then(() => note('suspended_user_speaking')).catch(() => {});
+  };
+  window.rivaDropReplyAudio = () => {  // a real speech segment ended: the old reply is stale
+    const wasSuspended = Boolean(current && current.suspended);
+    stopCurrent('dropped_stale_reply');
+    if (wasSuspended && ctx) ctx.resume().catch(() => {});
+  };
+  window.rivaResumeReplyAudio = () => {  // VAD misfire: carry on
+    if (current && current.suspended && ctx) {
+      current.suspended = false;
+      ctx.resume().then(() => note('resumed_misfire')).catch(() => {});
+    }
+  };
+
+  let lastGeneration = '';
+  setInterval(() => {
+    const field = document.querySelector('#riva-generation-id textarea, #riva-generation-id input');
+    const id = field ? String(field.value || '').trim() : '';
+    if (!/^[a-f0-9]{32}$/.test(id) || id === lastGeneration) return;
+    lastGeneration = id;
+    play(id);
+  }, 150);
 }
 """
     import uvicorn
-    from fastapi import FastAPI
     from gradio.routes import mount_gradio_app
 
     demo.queue(max_size=64)
@@ -533,6 +548,8 @@ if (!window.rivaPlaybackInstalled) {
         except (ValueError, KeyError, TypeError):
             return {"recorded": False}
         return {"recorded": True}
+
+    add_reply_audio_route(api, replies)
 
     @api.post("/riva/playback")
     async def record_browser_playback(request: Request) -> dict[str, bool]:

@@ -360,6 +360,15 @@ class ReplyRun:
             if not self.done.is_set():
                 self.close()
 
+    def read_audio(self, offset: int) -> tuple[bytes, bool]:
+        """Return PCM produced since ``offset`` and whether no more will ever arrive."""
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        with self.lock:
+            chunk = bytes(self.pcm[offset:])
+            drained = offset + len(chunk) >= len(self.pcm)
+        return chunk, drained and (self.done.is_set() or self.cancelled.is_set())
+
     def record_playback(self, now_ms: float) -> bool:
         elapsed = now_ms - self.client_started_ms
         if not math.isfinite(elapsed) or not 0 <= elapsed <= 180000:

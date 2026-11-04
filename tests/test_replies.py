@@ -361,3 +361,65 @@ def test_format_metrics_with_cancellation_and_playback_duration():
     )
     assert "**Status:** abgebrochen" in stopped_early
     assert "Abbruch nach: 1.50 s" in stopped_early
+
+
+def test_read_audio_returns_incremental_pcm_and_finishes_only_when_drained(tmp_path):
+    _, saved = saved_turn(tmp_path)
+    run = ReplyRun(saved, "Test.", ReplyConfig(), FakeReplyProvider(), 0)
+    try:
+        for _ in run.updates():  # drain the bounded queue so the synthesizer can finish
+            pass
+        assert run.done.wait(2)
+        everything, finished = run.read_audio(0)
+        expected = np.concatenate(
+            [np.full(10000, 1000, dtype="<i2"), np.full(10000, 2000, dtype="<i2")]
+        ).tobytes()
+        assert everything == expected
+        assert finished
+        tail, finished = run.read_audio(len(expected) - 6)
+        assert tail == expected[-6:] and finished
+        assert run.read_audio(len(expected)) == (b"", True)
+        with pytest.raises(ValueError, match="non-negative"):
+            run.read_audio(-1)
+    finally:
+        run.close()
+
+
+def test_read_audio_is_not_finished_while_generation_is_running(tmp_path):
+    _, saved = saved_turn(tmp_path)
+    provider = FakeReplyProvider(gated=True)
+    run = ReplyRun(saved, "Test.", ReplyConfig(), provider, 0)
+    try:
+        assert provider.first_speech.wait(2)
+        _, finished = run.read_audio(0)
+        assert not finished
+    finally:
+        provider.continue_text.set()
+        run.close()
+
+
+def test_reply_audio_endpoint_streams_exact_pcm_and_rejects_bad_ids(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from riva.experiments.voice_reply import add_reply_audio_route
+
+    identity, saved = saved_turn(tmp_path)
+    manager = ReplyManager(ReplyConfig(), FakeReplyProvider)
+    api = FastAPI()
+    add_reply_audio_route(api, manager)
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    try:
+        client = TestClient(api)
+        threading.Thread(target=lambda: [None for _ in run.updates()], daemon=True).start()
+        response = client.get(f"/riva/reply_audio/{run.generation_id}")
+        expected = np.concatenate(
+            [np.full(10000, 1000, dtype="<i2"), np.full(10000, 2000, dtype="<i2")]
+        ).tobytes()
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.content == expected
+        assert client.get("/riva/reply_audio/" + "0" * 32).status_code == 404
+        assert client.get("/riva/reply_audio/not-a-generation-id").status_code == 404
+    finally:
+        manager.release(identity)

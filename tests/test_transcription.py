@@ -618,14 +618,14 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
         assert rate == 16000
         assert np.array_equal(restored, samples)
         assert [event["type"] for event in wire.sent].count("input_audio_buffer.commit") == 1
-        stages = {row["stage"] for row in updates[-1][8]}
+        stages = {row["stage"] for row in updates[-1][7]}
         assert {
             "segment.event_received",
             "asr.audio_sent",
             "asr.commit_sent",
             "asr.completed",
         } <= stages
-        assert sessions.get_vad_diagnostics(identity) == updates[-1][8]
+        assert sessions.get_vad_diagnostics(identity) == updates[-1][7]
     finally:
         sessions.release(identity)
 
@@ -712,9 +712,10 @@ def test_voice_vad_segment_flows_through_asr_llm_and_tts(
         updates = list(handlers["vad_segment"](payload, identity))
         assert updates[-1][1] == "Heute war ich im Park."
         assert updates[-1][4] == "Das klingt schön."
-        assert updates[-1][6]["status"] == "completed"
-        assert any(isinstance(update[5], bytes) for update in updates)
-        assert any(row["stage"] == "reply.completed" for row in updates[-1][8])
+        assert updates[-1][5]["status"] == "completed"
+        assert updates[-1][5]["audio_seconds_produced"] > 0
+        assert updates[-1][6] == updates[-1][5]["generation_id"]
+        assert any(row["stage"] == "reply.completed" for row in updates[-1][7])
     finally:
         replies.release(identity)
         sessions.release(identity)
@@ -749,8 +750,8 @@ def test_vad_self_test_uses_mocked_providers_and_allowlisted_timeline(
         assert "SYNTHETIC TEST" in updates[-1][2]
         assert updates[-1][1] == "Synthetischer Testlauf."
         assert updates[-1][4] == SyntheticReplyProvider.text_reply
-        assert updates[-1][6]["status"] == "completed"
-        stages = {row["stage"] for row in updates[-1][8]}
+        assert updates[-1][5]["status"] == "completed"
+        stages = {row["stage"] for row in updates[-1][7]}
         assert {
             "harness.injected",
             "asr.audio_sent",
@@ -782,8 +783,8 @@ def test_synthetic_harness_button_runs_segment_processor_directly(
         assert "SYNTHETIC TEST" in updates[-1][2]
         assert updates[-1][1] == "Synthetischer Testlauf."
         assert updates[-1][4] == SyntheticReplyProvider.text_reply
-        assert updates[-1][6]["status"] == "completed"
-        assert any(row["stage"] == "harness.injected" for row in updates[-1][8])
+        assert updates[-1][5]["status"] == "completed"
+        assert any(row["stage"] == "harness.injected" for row in updates[-1][7])
     finally:
         replies.release(identity)
         sessions.release(identity)
@@ -884,32 +885,3 @@ def test_vad_submit_button_stays_in_dom_for_browser_click(tmp_path: Path) -> Non
     ]
     assert len(buttons) == 1
     assert buttons[0].visible == "hidden"
-
-
-def test_vad_updates_leave_streaming_audio_untouched_until_real_audio(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A None on a streaming Audio output opens an empty HLS playlist (hls.js fatal)."""
-    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
-    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
-
-    from riva.audio.replies import ReplyConfig, ReplyManager
-    from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
-
-    sessions = AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), SyntheticWire)
-    replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
-    identity = new_development_session()
-    app = build_vad_app(sessions, replies, test_mode=True)
-    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
-    try:
-        updates = list(handlers["synthetic_pipeline"](identity))
-        first_audio = next(i for i, u in enumerate(updates) if isinstance(u[5], bytes))
-        assert first_audio > 0
-        # Before audio: a prop-update (skip) marker, never None.
-        assert all(u[5] is not None for u in updates[:first_audio])
-        assert all(not isinstance(u[5], bytes) and u[5] is not None for u in updates[:first_audio])
-        # After audio exists, the closing update sends None to finalize the stream.
-        assert updates[-1][5] is None
-    finally:
-        replies.release(identity)
-        sessions.release(identity)
