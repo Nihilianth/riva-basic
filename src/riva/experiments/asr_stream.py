@@ -165,8 +165,12 @@ async () => {
     await window.rivaVad.loading;
     if (!window.vad || !window.vad.MicVAD) throw new Error("VAD library unavailable");
     if (window.rivaVad.instance) window.rivaVad.instance.destroy();
+    const vadBase = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/";
+    const ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
     window.rivaVad.instance = await window.vad.MicVAD.new({
       model: "v5",
+      baseAssetPath: vadBase,
+      onnxWASMBasePath: ortBase,
       onSpeechStart: () => {
         const button = [...document.querySelectorAll("button")].find(
           (b) => b.textContent.includes("Start recording")
