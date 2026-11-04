@@ -343,14 +343,19 @@ def vad_segment_updates(
                 reply_text,
                 metrics,
             )
-        event_name = (
-            EventName.RESPONSE_COMPLETED if run.status == "completed" else EventName.RESPONSE_FAILED
-        )
+        event_name = {
+            "completed": EventName.RESPONSE_COMPLETED,
+            "cancelled": EventName.RESPONSE_CANCELLED,
+        }.get(run.status, EventName.RESPONSE_FAILED)
         write_event(
             Event(event_name, identity.session_id, saved.metadata.turn_id, run.generation_id),
             sys.stdout,
         )
-        record("reply.completed" if run.status == "completed" else "reply.failed")
+        record(
+            {"completed": "reply.completed", "cancelled": "reply.cancelled"}.get(
+                run.status, "reply.failed"
+            )
+        )
         yield update(
             result.partial,
             result.text or "",
@@ -598,6 +603,13 @@ async (enabled) => {
         if (window.rivaHoldReplyAudio) window.rivaHoldReplyAudio();
         stage("speech start");
       },
+      onSpeechRealStart: () => {
+        // Confirmed speech (not a misfire): tell the backend to stop generating the old reply.
+        const host = document.querySelector("#riva-vad-speech");
+        const button = host instanceof HTMLButtonElement ? host : host?.querySelector("button");
+        if (button) button.click();
+        stage("speech confirmed");
+      },
       onSpeechEnd: (audio) => {
         window.rivaVad.speaking = false;
         if (window.rivaDropReplyAudio) window.rivaDropReplyAudio();
@@ -680,6 +692,11 @@ def build_vad_app(
         )
         yield from vad_segment_updates(payload, identity, sessions, replies, allow_synthetic=True)
 
+    def vad_speech(identity: SessionIdentity) -> None:
+        """The user is speaking: stop generating a reply that is still in progress."""
+        if replies is not None:
+            replies.cancel_generating(identity)
+
     def release(identity: SessionIdentity) -> None:
         sessions.release(identity)
         if replies is not None:
@@ -715,6 +732,7 @@ def build_vad_app(
         diagnostics = gr.JSON(label="VAD → ASR event timeline")
         payload = gr.Textbox(visible=False)
         submit = gr.Button("Submit speech segment", visible="hidden", elem_id="riva-vad-submit")
+        speech = gr.Button("Speech started", visible="hidden", elem_id="riva-vad-speech")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
         status = gr.Textbox(label="Segmentstatus", interactive=False)
@@ -766,6 +784,13 @@ def build_vad_app(
             inputs=[enabled],
             outputs=[],
             js=VAD_BROWSER_JS,
+            queue=False,
+            api_visibility="private",
+        )
+        speech.click(
+            vad_speech,
+            inputs=[identity],
+            outputs=[],
             queue=False,
             api_visibility="private",
         )

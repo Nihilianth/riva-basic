@@ -2,7 +2,9 @@ import base64
 import json
 import queue
 import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -885,3 +887,62 @@ def test_vad_submit_button_stays_in_dom_for_browser_click(tmp_path: Path) -> Non
     ]
     assert len(buttons) == 1
     assert buttons[0].visible == "hidden"
+
+
+def test_speech_start_cancels_generating_reply_and_frees_the_segment_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager, TextPart
+    from riva.experiments.vad_self_test import SyntheticWire
+
+    release_text = threading.Event()
+
+    class SlowProvider:
+        def text(self, transcript, config):
+            yield TextPart("delta", "Erster Satz. ")
+            release_text.wait(5)  # still "generating" when the user speaks
+            yield TextPart("delta", "Zweiter Satz.")
+            yield TextPart("completed", "Erster Satz. Zweiter Satz.")
+
+        def speech(self, phrase, config):
+            yield b"\0\0" * 12000
+
+    sessions = AsrSessions(RecordingStore(tmp_path / "a"), AsrConfig(), SyntheticWire)
+    replies = ReplyManager(ReplyConfig(), SlowProvider)
+    identity = new_development_session()
+    app = build_vad_app(sessions, replies, test_mode=True)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    payload = json.dumps(
+        {
+            "pcm16_b64": base64.b64encode(np.zeros(16000, dtype="<i2").tobytes()).decode("ascii"),
+            "started_ms": 0.0,
+            "events": [{"stage": "harness.injected", "at_ms": 0.0}],
+            "synthetic": True,
+        }
+    )
+    updates: list[tuple[Any, ...]] = []
+
+    def run_segment() -> None:
+        updates.extend(handlers["vad_segment"](payload, identity))
+
+    worker = threading.Thread(target=run_segment, daemon=True)
+    try:
+        worker.start()
+        deadline = time.monotonic() + 5
+        while replies.current(identity) is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        handlers["vad_speech"](identity)  # browser: confirmed speech start
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "segment handler must end once its reply is cancelled"
+        stages = [row["stage"] for row in updates[-1][7]]
+        assert "reply.cancelled" in stages and "reply.completed" not in stages
+        assert updates[-1][5]["status"] == "cancelled"
+        out = capsys.readouterr().out
+        assert "response.cancelled" in out and "response.completed" not in out
+        assert "Erster Satz" not in out  # no reply text in the event log
+    finally:
+        release_text.set()
+        replies.release(identity)
+        sessions.release(identity)

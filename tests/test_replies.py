@@ -423,3 +423,34 @@ def test_reply_audio_endpoint_streams_exact_pcm_and_rejects_bad_ids(tmp_path):
         assert client.get("/riva/reply_audio/not-a-generation-id").status_code == 404
     finally:
         manager.release(identity)
+
+
+def test_cancel_generating_only_cancels_a_running_reply(tmp_path):
+    identity, saved = saved_turn(tmp_path)
+    provider = FakeReplyProvider(gated=True)
+    manager = ReplyManager(ReplyConfig(), lambda: provider)
+    assert manager.cancel_generating(identity) is None  # nothing started yet
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    try:
+        assert provider.first_speech.wait(2)
+        assert manager.cancel_generating(identity) is run
+        assert run.status == "cancelled"
+        assert run.cancelled.is_set()
+    finally:
+        provider.continue_text.set()
+        manager.release(identity)
+
+
+def test_cancel_generating_leaves_a_completed_reply_untouched(tmp_path):
+    identity, saved = saved_turn(tmp_path)
+    manager = ReplyManager(ReplyConfig(), FakeReplyProvider)
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    try:
+        for _ in run.updates():
+            pass
+        assert run.done.wait(2) and run.status == "completed"
+        assert manager.cancel_generating(identity) is None
+        assert run.status == "completed"
+        assert json.loads((run.root / "reply.json").read_text())["status"] == "completed"
+    finally:
+        manager.release(identity)

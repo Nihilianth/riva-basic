@@ -518,6 +518,18 @@ class ReplyManager:
     def cancel(self, identity: SessionIdentity, now_ms: float | None = None) -> ReplyRun | None:
         return self.stop(identity, now_ms)
 
+    def cancel_generating(self, identity: SessionIdentity) -> ReplyRun | None:
+        """Cancel the session's reply only while it is still being generated.
+
+        A finished reply keeps its stored ``completed`` status; stopping it would rewrite it.
+        """
+        with self.lock:
+            run = self.runs.get(identity.session_id)
+            if run is None or run.done.is_set() or run.status != "generating":
+                return None
+            run.stop()
+            return run
+
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:
             run = self.runs.pop(identity.session_id, None)
