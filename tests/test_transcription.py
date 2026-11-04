@@ -761,6 +761,33 @@ def test_vad_self_test_uses_mocked_providers_and_allowlisted_timeline(
         sessions.release(identity)
 
 
+def test_synthetic_harness_button_runs_segment_processor_directly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager
+    from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+    sessions = AsrSessions(
+        RecordingStore(tmp_path / "synthetic-archive"), AsrConfig(), SyntheticWire
+    )
+    replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    identity = new_development_session()
+    app = build_vad_app(sessions, replies, test_mode=True)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    try:
+        updates = list(handlers["synthetic_pipeline"](identity))
+        assert "SYNTHETIC TEST" in updates[-1][2]
+        assert updates[-1][1] == "Synthetischer Testlauf."
+        assert updates[-1][4] == SyntheticReplyProvider.text_reply
+        assert updates[-1][6]["status"] == "completed"
+        assert any(row["stage"] == "harness.injected" for row in updates[-1][8])
+    finally:
+        replies.release(identity)
+        sessions.release(identity)
+
+
 def test_voice_ui_stop_button_cancels_playback_and_resets_controls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
