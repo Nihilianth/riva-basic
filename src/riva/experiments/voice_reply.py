@@ -377,6 +377,30 @@ if (!window.rivaPlaybackInstalled) {
     if (match) window.rivaCurrentGeneration = match[1];
   }, 250);
   const note = (name) => { if (window.rivaVadStage) window.rivaVadStage(name); };
+  // Status-only probe of Gradio's HLS stream requests (no URLs or bodies are recorded).
+  let lastStreamNote = '';
+  const streamNote = (url, status) => {
+    const text = String(url);
+    if (!text.includes('/gradio_api/stream/') || status === 200) return;
+    const kind = text.includes('playlist.m3u8') ? 'playlist' : 'segment';
+    const message = 'stream ' + kind + ' HTTP ' + status;
+    if (message === lastStreamNote) return;
+    lastStreamNote = message;
+    note(message);
+  };
+  const nativeOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.addEventListener('loadend', () => streamNote(url, this.status));
+    return nativeOpen.call(this, method, url, ...rest);
+  };
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    return nativeFetch(input, init).then(
+      (response) => { streamNote(url, response.status); return response; },
+      (error) => { streamNote(url, 0); throw error; }
+    );
+  };
   const userSpeaking = () => Boolean(window.rivaVad && window.rivaVad.speaking);
   // Barge-in: never play (or keep playing) a reply while VAD hears the user.
   window.rivaHoldReplyAudio = () => {
