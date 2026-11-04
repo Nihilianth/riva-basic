@@ -555,7 +555,8 @@ async (enabled) => {
       const payload = window.rivaVad.pending.shift();
       payload.events.push({stage: "vad.submit_clicked", at_ms: performance.now()});
       window.rivaVad.activePayload = JSON.stringify(payload);
-      const button = document.querySelector("#riva-vad-submit");
+      const host = document.querySelector("#riva-vad-submit");
+      const button = host instanceof HTMLButtonElement ? host : host?.querySelector("button");
       if (button) button.click();
       else {
         window.rivaVad.busy = false;
@@ -633,6 +634,20 @@ def build_vad_app(
         yield from vad_segment_updates(
             payload, identity, sessions, replies, allow_synthetic=test_mode
         )
+
+    def synthetic_pipeline(identity: SessionIdentity) -> Iterator[tuple[Any, ...]]:
+        pcm = np.zeros(16_000, dtype="<i2")
+        indices = np.arange(len(pcm), dtype=np.float32)
+        pcm[:] = np.rint(np.sin(2 * np.pi * 440 * indices / 16_000) * 5000).astype("<i2")
+        payload = json.dumps(
+            {
+                "pcm16_b64": base64.b64encode(pcm.tobytes()).decode("ascii"),
+                "started_ms": 0.0,
+                "events": [{"stage": "harness.injected", "at_ms": 0.0}],
+                "synthetic": True,
+            }
+        )
+        yield from vad_segment_updates(payload, identity, sessions, replies, allow_synthetic=True)
 
     def release(identity: SessionIdentity) -> None:
         sessions.release(identity)
@@ -720,37 +735,20 @@ def build_vad_app(
         )
         if test_mode:
             synthetic_test.click(
-                None,
-                inputs=[],
-                outputs=[],
-                js=r"""
-() => {
-  window.rivaVad = window.rivaVad || {pending: [], busy: false};
-  window.rivaVad.enabled = true;
-  const pcm = new Int16Array(16000);
-  for (let i = 0; i < pcm.length; i++) {
-    pcm[i] = Math.round(Math.sin(2 * Math.PI * 440 * i / 16000) * 5000);
-  }
-  const bytes = new Uint8Array(pcm.buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  window.rivaVad.pending.push({
-    pcm16_b64: btoa(binary),
-    started_ms: performance.now(),
-    events: [{stage: "harness.injected", at_ms: performance.now()}],
-    synthetic: true,
-  });
-  if (window.rivaVad.submitNext) window.rivaVad.submitNext();
-  else {
-    const payload = window.rivaVad.pending.shift();
-    payload.events.push({stage: "vad.submit_clicked", at_ms: performance.now()});
-    window.rivaVad.activePayload = JSON.stringify(payload);
-    document.querySelector("#riva-vad-submit")?.click();
-  }
-}
-""",
+                synthetic_pipeline,
+                inputs=[identity],
+                outputs=[
+                    partial,
+                    final,
+                    status,
+                    details,
+                    reply_text,
+                    reply_audio,
+                    reply_metrics,
+                    reply_latency,
+                    diagnostics,
+                ],
+                concurrency_limit=1,
                 queue=False,
                 api_visibility="private",
             )

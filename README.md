@@ -47,18 +47,19 @@ This is a local, unauthenticated technical test. Do not use participant data yet
 
 ### Synthetic VAD pipeline diagnostic
 
-To exercise the browser-to-Gradio segment event without microphone access or paid
-provider calls, run the optional harness on another port:
+To exercise the backend segment-processing pipeline without microphone access or
+paid provider calls, run the optional harness on another port:
 
 ```sh
 uv run --locked riva-voice-test --vad-self-test --port 7862
 ```
 
-Click **Run synthetic pipeline test**. This injects an already-formed synthetic
-segment through the same Gradio submit event (it does not run the VAD model). The
-timeline reports segment handoff, backend validation, ASR audio-send/commit, ASR
-completion, and mocked reply completion. It includes stage names and elapsed times,
-not audio or transcript content.
+Click **Run synthetic pipeline test**. It submits a generated tone through a separate
+Gradio callback to the same backend segment processor (it does not exercise browser
+VAD or the hidden browser submit control). The timeline reports backend validation,
+ASR audio-send/commit, ASR completion, and mocked reply completion. It includes stage
+names and elapsed times, not audio or transcript content. Compare this with the normal
+VAD timeline to determine whether a failure is in browser submission or backend processing.
 
 ## Try streaming German transcription
 
