@@ -526,24 +526,30 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
 VAD_BROWSER_JS = r"""
 async (enabled) => {
   const status = (message) => {
-    document.querySelectorAll("[data-testid='markdown']").forEach((node) => {
-      if (node.textContent && node.textContent.includes("VAD ")) node.textContent = message;
-    });
+    const node = document.querySelector("#riva-vad-state");
+    const target = node && (node.querySelector("p") || node);
+    if (target) target.textContent = "Browser VAD: " + message;
+  };
+  const stage = (name) => {
+    window.rivaVad = window.rivaVad || {};
+    window.rivaVad.stages = (window.rivaVad.stages || []).concat([name]).slice(-12);
+    status(window.rivaVad.stages.join(" → "));
   };
   if (!window.rivaVad) {
     window.rivaVad = {instance: null, loading: null, enabled: false, busy: false, pending: []};
   }
   if (enabled && window.rivaVad.enabled && window.rivaVad.instance) {
-    status("VAD active; say a phrase, then pause for its endpoint.");
+    stage("already listening");
     return;
   }
   if (!enabled) {
     window.rivaVad.enabled = false;
     window.rivaVad.pending = [];
     if (window.rivaVad.instance) window.rivaVad.instance.pause();
-    status("VAD paused. Manual mode remains available at port 7860.");
+    stage("paused");
     return;
   }
+  stage("start");
   if (!window.rivaVad.loading) {
     window.rivaVad.loading = new Promise((resolve, reject) => {
       const ortScript = document.createElement("script");
@@ -551,16 +557,17 @@ async (enabled) => {
       ortScript.onload = () => {
         const vadScript = document.createElement("script");
         vadScript.src = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js";
-        vadScript.onload = resolve;
-        vadScript.onerror = reject;
+        vadScript.onload = () => { stage("vad script loaded"); resolve(); };
+        vadScript.onerror = () => reject(new Error("vad_script_blocked"));
         document.head.appendChild(vadScript);
       };
-      ortScript.onerror = reject;
+      ortScript.onerror = () => reject(new Error("ort_script_blocked"));
       document.head.appendChild(ortScript);
     });
   }
   try {
     await window.rivaVad.loading;
+    stage("scripts ready");
     if (!window.vad || !window.vad.MicVAD) throw new Error("VAD library unavailable");
     if (window.rivaVad.instance) window.rivaVad.instance.destroy();
     const submitNext = () => {
@@ -574,12 +581,13 @@ async (enabled) => {
       if (button) button.click();
       else {
         window.rivaVad.busy = false;
-        status("VAD submit control unavailable.");
+        stage("submit control not found");
       }
     };
     window.rivaVad.submitNext = submitNext;
     const vadBase = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/";
     const ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+    stage("requesting microphone / loading model");
     window.rivaVad.instance = await window.vad.MicVAD.new({
       model: "v5",
       baseAssetPath: vadBase,
@@ -589,12 +597,12 @@ async (enabled) => {
       minSpeechMs: 250,
       onSpeechStart: () => {
         window.rivaVad.speechStartMs = performance.now();
-        status("VAD detected speech…");
+        stage("speech start");
       },
       onSpeechEnd: (audio) => {
         if (!window.rivaVad.enabled) return;
         if (window.rivaVad.pending.length >= 2) {
-          status("VAD busy; pending segment limit reached.");
+          stage("busy: pending segment limit reached");
           return;
         }
         const pcm = new Int16Array(audio.length);
@@ -618,17 +626,21 @@ async (enabled) => {
           ],
         });
         window.rivaVad.speechStartMs = null;
-        status("VAD segment captured; submitting for ASR…");
+        stage("speech end, segment queued");
         submitNext();
       },
-      onVADMisfire: () => {},
+      onVADMisfire: () => stage("misfire (too short)"),
     });
     window.rivaVad.enabled = true;
     await window.rivaVad.instance.start();
-    status("VAD active; say a phrase, then pause for its endpoint.");
+    stage("listening");
   } catch (error) {
     window.rivaVad.enabled = false;
-    status("VAD failed to start; see browser console.");
+    const raw = String((error && error.name) || "Error");
+    const name = raw.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40);
+    const text = String((error && error.message) || "");
+    const msg = text.match(/^(vad_script_blocked|ort_script_blocked)$/);
+    stage("FAILED: " + (msg ? msg[0] : name));
     console.warn("RIVA VAD initialization failed", error);
   }
 }
@@ -694,7 +706,7 @@ def build_vad_app(
             value=new_development_session, time_to_live=600, delete_callback=release
         )
         enabled = gr.Checkbox(label="Continuous listening", value=not test_mode)
-        gr.Markdown("VAD is loading…")
+        gr.Markdown("Browser VAD: waiting for page script…", elem_id="riva-vad-state")
         diagnostics = gr.JSON(label="VAD → ASR event timeline")
         payload = gr.Textbox(visible=False)
         submit = gr.Button("Submit speech segment", visible=False, elem_id="riva-vad-submit")
