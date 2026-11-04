@@ -376,8 +376,33 @@ if (!window.rivaPlaybackInstalled) {
     const match = document.body.innerText.match(/"generation_id":\s*"([a-f0-9]+)"/);
     if (match) window.rivaCurrentGeneration = match[1];
   }, 250);
+  const note = (name) => { if (window.rivaVadStage) window.rivaVadStage(name); };
+  const watchStream = (audio) => {
+    const src = audio.currentSrc || audio.getAttribute('src') || '';
+    if (!src || audio.dataset.rivaSrc === src) return;
+    audio.dataset.rivaSrc = src;
+    note('reply audio: new stream');
+    // Gradio's autoplay only fires for the first stream; start each new reply explicitly.
+    const start = () => {
+      audio.play().then(
+        () => note('reply audio: playing'),
+        (error) => {
+          const raw = String((error && error.name) || '');
+          note('reply audio: play blocked ' + raw.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40));
+        }
+      );
+    };
+    if (audio.readyState >= 2) start();
+    else audio.addEventListener('canplay', start, {once: true});
+  };
   const bindAudio = () => {
     document.querySelectorAll('audio').forEach((audio) => {
+      watchStream(audio);
+      if (audio.dataset.rivaEndBound !== '1') {
+        audio.dataset.rivaEndBound = '1';
+        audio.addEventListener('ended', () => note('reply audio: ended'));
+        audio.addEventListener('error', () => note('reply audio: element error'));
+      }
       if (audio.dataset.rivaPlayBound === '1') return;
       audio.dataset.rivaPlayBound = '1';
       audio.addEventListener('play', () => {
@@ -398,7 +423,7 @@ if (!window.rivaPlaybackInstalled) {
       });
     });
   };
-  setInterval(bindAudio, 500);
+  setInterval(bindAudio, 250);
 }
 """
     import uvicorn

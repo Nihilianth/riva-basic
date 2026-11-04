@@ -535,6 +535,7 @@ async (enabled) => {
     window.rivaVad.stages = (window.rivaVad.stages || []).concat([name]).slice(-12);
     status(window.rivaVad.stages.join(" → "));
   };
+  window.rivaVadStage = stage;
   if (!window.rivaVad) {
     window.rivaVad = {instance: null, loading: null, enabled: false, busy: false, pending: []};
   }
