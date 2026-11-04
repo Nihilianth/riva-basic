@@ -564,6 +564,26 @@ def test_failed_asr_never_starts_reply_provider(
         sessions.release(identity)
 
 
+def test_manual_mode_remains_manual_and_continuous_endpoint_is_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    app = build_asr_app(sessions)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    identity = new_development_session()
+    try:
+        sessions.begin(identity)
+        assert not sessions.current(identity).stopped
+        assert handlers["continuous_stopped"](identity, False).interactive
+        assert not sessions.current(identity).stopped
+        assert handlers["continuous_stopped"](identity, True).interactive
+        assert sessions.current(identity).stopped
+    finally:
+        sessions.release(identity)
+
+
 def test_voice_ui_stop_button_cancels_playback_and_resets_controls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

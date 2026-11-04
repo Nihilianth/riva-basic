@@ -173,6 +173,14 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             sessions.current(identity).stopped = True
         return gr.Button(interactive=True)
 
+    def continuous_stopped(identity: SessionIdentity, enabled: bool) -> gr.Button:
+        """Mark an endpoint without starting a new turn or saving it."""
+        if not enabled:
+            return gr.Button(interactive=True)
+        with suppress(KeyError):
+            sessions.current(identity).stopped = True
+        return gr.Button(interactive=True)
+
     def poll(identity: SessionIdentity) -> tuple[str, str, str]:
         result, duration = sessions.snapshot(identity)
         detail = f"{result.status} · empfangen: {duration:.2f} s"
@@ -218,7 +226,10 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             "**Abschließen & speichern**. Vor einer neuen Aufnahme bitte immer speichern.\n\n"
             "Gespeichert wird nur das vom Browser empfangene Audio. "
             "Gradio kann beim Stoppen den letzten noch nicht gesendeten Chunk verwerfen. "
-            "Keine Wort-Zeitstempel/SRT, keine automatische Gesprächsantwort."
+            "Keine Wort-Zeitstempel/SRT, keine automatische Gesprächsantwort.\n\n"
+            "Continuous listening ist experimentell: die derzeitige native Gradio-"
+            "Aufnahme beendet weiterhin nur über Stop; zuverlässige clientseitige VAD-"
+            "Endpoint-Erkennung wird separat untersucht."
         )
         identity = gr.State(
             value=new_development_session, time_to_live=600, delete_callback=release
@@ -232,6 +243,11 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             label="Live-Mikrofon",
         )
         finish_button = gr.Button("Abschließen & speichern", interactive=False, variant="primary")
+        continuous_mode = gr.Checkbox(
+            label="Continuous listening (experimental)",
+            value=False,
+            info="VAD stops the current turn after speech ends; explicit save remains required.",
+        )
         discard_button = gr.Button("Ungespeicherte Aufnahme verwerfen")
         partial = gr.Textbox(label="Vorläufige Transkription", interactive=False)
         final = gr.Textbox(label="Endgültige Transkription", interactive=False)
@@ -264,6 +280,19 @@ def build_asr_app(sessions: AsrSessions, replies: ReplyManager | None = None) ->
             outputs=[finish_button],
             concurrency_id=group,
             concurrency_limit=1,
+            api_visibility="private",
+        )
+        continuous_mode.change(
+            lambda enabled: gr.Button(interactive=not enabled),
+            inputs=[continuous_mode],
+            outputs=[finish_button],
+            api_visibility="private",
+        )
+        microphone.stop_recording(
+            continuous_stopped,
+            inputs=[identity, continuous_mode],
+            outputs=[finish_button],
+            trigger_mode="multiple",
             api_visibility="private",
         )
         finish_event = finish_button.click(
