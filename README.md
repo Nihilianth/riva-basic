@@ -2,26 +2,28 @@
 
 Reflective Interactive Voice Assistant: an architecture prototype for accessible,
 personalized German-language journaling. Local capture, German streaming ASR, and
-a short streamed text-reply/TTS baseline are available. Stateful conversation
-orchestration, memory, continuous listening, and interruption are not implemented yet.
+a short streamed text-reply/TTS baseline are available. Browser-VAD continuous
+segments are implemented experimentally and await live verification. Stateful
+conversation orchestration, memory, and reliable interruption are not implemented yet.
 
-## Try the complete manual voice baseline
+## Try the continuous VAD voice experiment
 
 ```sh
 uv sync --locked
 uv run --env-file .env riva-voice-test
 ```
 
-Open **http://localhost:7861**. Record in German, leave the trailing pause, stop,
-and select **Abschließen & speichern**. Review the final transcript, then select
-**Antwort erzeugen**. A short German response is generated as text and spoken by
-an **AI-generated voice**. If autoplay is blocked, use the audio player's Play control.
-Wait until the spoken response finishes before recording again.
+Open **http://localhost:7861** in Chrome/Edge and allow microphone access. Browser
+VAD owns the microphone and submits each detected speech segment directly; it does
+not use Gradio's native microphone stream. Each segment is privately saved and sent
+to OpenAI ASR. A completed transcript automatically triggers a short German LLM
+reply and streamed **AI-generated speech**. Wait for the reply before speaking
+again; this experiment does not claim barge-in/interruption. The manual Gradio
+microphone/explicit-save ASR experiment remains on **http://localhost:7860**.
 
-Recording sends audio to OpenAI; the reply button additionally sends the final text
-to OpenAI and incurs LLM/TTS costs. No reply is generated from provisional, failed,
-or empty ASR. Double-clicking a completed turn does not start another paid generation.
-Replies use only the current turn: there is no conversation history or personalization.
+Detected segments send audio to OpenAI ASR, and successful final text is sent to
+OpenAI LLM/TTS (additional API costs). Failed or empty ASR does not generate a reply.
+Each segment is an independent turn; there is no conversation history or personalization.
 
 Default models are `gpt-4.1-mini` and `gpt-4o-mini-tts`, voice `coral`. Override with
 `--llm-model`, `--tts-model`, `--voice`, or the optional environment variables in
@@ -30,7 +32,7 @@ models are deprecated with announced shutdown January 6, 2027.** The prototype k
 the provider replaceable; migration is tracked in `riva-ddc`. Do not pass a Realtime
 model to the Speech API or assume it can be swapped by model name alone.
 
-Audio and transcripts go under `../private/research-data/voice-test/`. Each reply
+VAD audio segments and transcripts go under `../private/research-data/voice-test/`. Each reply
 gets a private `replies/<generation-id>/` directory with `reply.txt`, `reply.json`,
 and any synthesized `speech.wav`. Generated text/audio are not an approved journal
 entry and are not proof of what the user heard. Failed/partial replies are labelled

@@ -13,7 +13,7 @@ from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
 from riva.audio.transcription import AsrConfig
 from riva.event_log import Event, EventName, write_event
-from riva.experiments.asr_stream import AsrSessions, asr_app_kwargs, build_asr_app
+from riva.experiments.asr_stream import AsrSessions, build_vad_app
 from riva.experiments.audio_capture import prepare_environment
 
 if TYPE_CHECKING:
@@ -330,7 +330,7 @@ def main() -> None:
     replies = ReplyManager(
         ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
     )
-    demo = build_asr_app(sessions, replies)
+    demo = build_vad_app(sessions, replies)
     playback_js = r"""
 window.rivaPlaybackInstalled = window.rivaPlaybackInstalled || false;
 if (!window.rivaPlaybackInstalled) {
@@ -446,7 +446,7 @@ if (!window.rivaPlaybackInstalled) {
         api,
         demo,
         path="/",
-        app_kwargs=asr_app_kwargs(demo),
+        app_kwargs={},
         js=playback_js,
         max_file_size="30mb",
         show_error=False,

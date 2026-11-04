@@ -10,7 +10,7 @@ import pytest
 from riva.audio.recordings import RecordingStore, new_development_session
 from riva.audio.transcription import AsrConfig, LiveTurn, PcmEncoder, Transcript, mono_float
 from riva.audio.transcripts import save_transcript
-from riva.experiments.asr_stream import AsrSessions, build_asr_app
+from riva.experiments.asr_stream import AsrSessions, build_asr_app, build_vad_app
 
 
 class FakeWire:
@@ -578,7 +578,7 @@ def test_manual_mode_remains_manual_and_continuous_endpoint_is_opt_in(
         assert not sessions.current(identity).stopped
         # The manual microphone path remains independent of the hidden VAD
         # segment submit event and still uses the explicit stop/save actions.
-        assert "vad_segment" in handlers
+        assert "vad_segment" not in handlers
         assert not sessions.current(identity).stopped
     finally:
         sessions.release(identity)
@@ -592,7 +592,7 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
     wire = FakeWire()
     sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), lambda: wire)
     identity = new_development_session()
-    app = build_asr_app(sessions)
+    app = build_vad_app(sessions)
     handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
     samples = np.arange(4000, dtype="<i2")
     payload = json.dumps(
@@ -619,6 +619,15 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
         sessions.release(identity)
 
 
+def test_vad_app_has_no_native_gradio_microphone_stream(tmp_path: Path) -> None:
+    sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), FakeWire)
+    app = build_vad_app(sessions)
+    handlers = [fn.fn.__name__ for fn in app.fns.values() if fn.fn]
+    assert "vad_segment" in handlers
+    assert "append" not in handlers
+    assert "begin" not in handlers
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -641,7 +650,7 @@ def test_invalid_vad_segments_are_rejected_without_opening_asr(
 
     sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), forbidden_factory)
     identity = new_development_session()
-    app = build_asr_app(sessions)
+    app = build_vad_app(sessions)
     handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
     try:
         output = list(handlers["vad_segment"](payload, identity))
@@ -672,7 +681,7 @@ def test_voice_vad_segment_flows_through_asr_llm_and_tts(
     sessions = AsrSessions(RecordingStore(tmp_path / "archive"), AsrConfig(), lambda: wire)
     replies = ReplyManager(ReplyConfig(), Provider)
     identity = new_development_session()
-    app = build_asr_app(sessions, replies)
+    app = build_vad_app(sessions, replies)
     handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
     pcm = np.arange(4000, dtype="<i2")
     payload = json.dumps(
