@@ -85,6 +85,8 @@ def test_streaming_turn_uses_one_connection_and_commits_after_audio() -> None:
         turn.append(audio())
         result = turn.finish()
         assert result.status == "completed"
+        assert turn.audio_sent.is_set()
+        assert turn.commit_sent.is_set()
         assert result.text == "Heute war ich im Park."
         assert result.partial == "Heute war"
         assert calls == [True]
@@ -599,13 +601,14 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
         {
             "pcm16_b64": base64.b64encode(samples.tobytes()).decode("ascii"),
             "started_ms": 123.0,
+            "events": [],
         }
     )
     try:
         updates = list(handlers["vad_segment"](payload, identity))
-        assert updates[0][1] == "Heute war ich im Park."
-        assert updates[0][2].startswith("VAD segment saved · 0.25 s")
-        assert updates[0][3]["frames"] == len(samples)
+        assert updates[-1][1] == "Heute war ich im Park."
+        assert any(update[2].startswith("VAD segment saved · 0.25 s") for update in updates)
+        assert updates[-1][3]["frames"] == len(samples)
         result, duration = sessions.snapshot(identity)
         assert result.status == "completed"
         assert duration == pytest.approx(0.25)
@@ -615,6 +618,13 @@ def test_vad_pcm_segment_is_saved_exactly_and_transcribed_once(
         assert rate == 16000
         assert np.array_equal(restored, samples)
         assert [event["type"] for event in wire.sent].count("input_audio_buffer.commit") == 1
+        stages = {row["stage"] for row in updates[-1][8]}
+        assert {
+            "segment.event_received",
+            "asr.audio_sent",
+            "asr.commit_sent",
+            "asr.completed",
+        } <= stages
     finally:
         sessions.release(identity)
 
@@ -632,10 +642,16 @@ def test_vad_app_has_no_native_gradio_microphone_stream(tmp_path: Path) -> None:
     "payload",
     [
         "not-json",
-        json.dumps({"pcm16_b64": "!", "started_ms": 0}),
-        json.dumps({"pcm16_b64": base64.b64encode(b"\0\0" * 100).decode(), "started_ms": 0}),
+        json.dumps({"pcm16_b64": "!", "started_ms": 0, "events": []}),
         json.dumps(
-            {"pcm16_b64": base64.b64encode(b"\0\0" * 2000).decode(), "started_ms": float("nan")}
+            {"pcm16_b64": base64.b64encode(b"\0\0" * 100).decode(), "started_ms": 0, "events": []}
+        ),
+        json.dumps(
+            {
+                "pcm16_b64": base64.b64encode(b"\0\0" * 2000).decode(),
+                "started_ms": float("nan"),
+                "events": [],
+            }
         ),
     ],
 )
@@ -685,14 +701,61 @@ def test_voice_vad_segment_flows_through_asr_llm_and_tts(
     handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
     pcm = np.arange(4000, dtype="<i2")
     payload = json.dumps(
-        {"pcm16_b64": base64.b64encode(pcm.tobytes()).decode("ascii"), "started_ms": 10.0}
+        {
+            "pcm16_b64": base64.b64encode(pcm.tobytes()).decode("ascii"),
+            "started_ms": 10.0,
+            "events": [],
+        }
     )
     try:
         updates = list(handlers["vad_segment"](payload, identity))
-        assert updates[0][1] == "Heute war ich im Park."
+        assert updates[-1][1] == "Heute war ich im Park."
         assert updates[-1][4] == "Das klingt schön."
         assert updates[-1][6]["status"] == "completed"
         assert any(isinstance(update[5], bytes) for update in updates)
+        assert any(row["stage"] == "reply.completed" for row in updates[-1][8])
+    finally:
+        replies.release(identity)
+        sessions.release(identity)
+
+
+def test_vad_self_test_uses_mocked_providers_and_allowlisted_timeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path / "cache"))
+    from riva.audio.replies import ReplyConfig, ReplyManager
+    from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+    sessions = AsrSessions(
+        RecordingStore(tmp_path / "synthetic-archive"), AsrConfig(), SyntheticWire
+    )
+    replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    identity = new_development_session()
+    app = build_vad_app(sessions, replies, test_mode=True)
+    handlers = {fn.fn.__name__: fn.fn for fn in app.fns.values() if fn.fn}
+    pcm = np.zeros(16000, dtype="<i2")
+    payload = json.dumps(
+        {
+            "pcm16_b64": base64.b64encode(pcm.tobytes()).decode("ascii"),
+            "started_ms": 50.0,
+            "events": [{"stage": "harness.injected", "at_ms": 50.0}],
+            "synthetic": True,
+        }
+    )
+    try:
+        updates = list(handlers["vad_segment"](payload, identity))
+        assert "SYNTHETIC TEST" in updates[-1][2]
+        assert updates[-1][1] == "Synthetischer Testlauf."
+        assert updates[-1][4] == SyntheticReplyProvider.text_reply
+        assert updates[-1][6]["status"] == "completed"
+        stages = {row["stage"] for row in updates[-1][8]}
+        assert {
+            "harness.injected",
+            "asr.audio_sent",
+            "asr.commit_sent",
+            "reply.completed",
+        } <= stages
     finally:
         replies.release(identity)
         sessions.release(identity)

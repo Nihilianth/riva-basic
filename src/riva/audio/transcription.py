@@ -144,6 +144,8 @@ class LiveTurn:
         self.commands: queue.Queue[npt.NDArray[np.float32] | None] = queue.Queue(maxsize=64)
         self.done = threading.Event()
         self.cancelled = threading.Event()
+        self.audio_sent = threading.Event()
+        self.commit_sent = threading.Event()
         self.result = Transcript("connecting")
         self.chunks: list[npt.NDArray[np.float32]] = []
         self.source_rate = 0
@@ -298,9 +300,11 @@ class LiveTurn:
                                 }
                             )
                         )
+                        self.audio_sent.set()
                     if chunk is None:
                         wire.send(json.dumps({"type": "input_audio_buffer.commit"}))
                         commit_sent = True
+                        self.commit_sent.set()
                         final_deadline = time.monotonic() + self.config.final_timeout
                         with self.lock:
                             if self.result.status != "failed":

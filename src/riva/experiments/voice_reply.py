@@ -320,17 +320,32 @@ def main() -> None:
     parser.add_argument("--llm-model", default=os.environ.get("RIVA_LLM_MODEL", "gpt-4.1-mini"))
     parser.add_argument("--tts-model", default=os.environ.get("RIVA_TTS_MODEL", "gpt-4o-mini-tts"))
     parser.add_argument("--voice", default=os.environ.get("RIVA_TTS_VOICE", "coral"))
+    parser.add_argument(
+        "--vad-self-test",
+        action="store_true",
+        help="Run a synthetic VAD-segment-to-reply harness with mocked providers and no API key.",
+    )
     args = parser.parse_args()
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    if not args.vad_self_test and not os.environ.get("OPENAI_API_KEY", "").strip():
         parser.error("OPENAI_API_KEY missing. Run: uv run --env-file .env riva-voice-test")
     if not 1 <= args.port <= 65535:
         parser.error("Invalid port")
     root = prepare_environment(args.private_dir)
-    sessions = AsrSessions(RecordingStore(root / "research-data" / "voice-test"), AsrConfig())
-    replies = ReplyManager(
-        ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
-    )
-    demo = build_vad_app(sessions, replies)
+    if args.vad_self_test:
+        from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+        sessions = AsrSessions(
+            RecordingStore(root / "research-data" / "vad-self-test"),
+            AsrConfig(),
+            SyntheticWire,
+        )
+        replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    else:
+        sessions = AsrSessions(RecordingStore(root / "research-data" / "voice-test"), AsrConfig())
+        replies = ReplyManager(
+            ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
+        )
+    demo = build_vad_app(sessions, replies, test_mode=args.vad_self_test)
     playback_js = r"""
 window.rivaPlaybackInstalled = window.rivaPlaybackInstalled || false;
 if (!window.rivaPlaybackInstalled) {
@@ -451,7 +466,12 @@ if (!window.rivaPlaybackInstalled) {
         max_file_size="30mb",
         show_error=False,
     )
-    print(f"Voice test: http://localhost:{args.port}; OpenAI ASR, LLM and TTS enabled")
-    print("Speech API models are deprecated; announced shutdown 2027-01-06 (riva-ddc).")
-    print("Browser playback timing uses a JavaScript observer.")
+    if args.vad_self_test:
+        print(
+            f"Synthetic VAD self-test: http://localhost:{args.port}; no provider calls or API key"
+        )
+    else:
+        print(f"Voice test: http://localhost:{args.port}; OpenAI ASR, LLM and TTS enabled")
+        print("Speech API models are deprecated; announced shutdown 2027-01-06 (riva-ddc).")
+        print("Browser playback timing uses a JavaScript observer.")
     uvicorn.run(api, host="127.0.0.1", port=args.port, log_level="warning")

@@ -45,6 +45,21 @@ and manual review time. See [voice baseline details](docs/experiments/voice-resp
 
 This is a local, unauthenticated technical test. Do not use participant data yet.
 
+### Synthetic VAD pipeline diagnostic
+
+To exercise the browser-to-Gradio segment event without microphone access or paid
+provider calls, run the optional harness on another port:
+
+```sh
+uv run --locked riva-voice-test --vad-self-test --port 7862
+```
+
+Click **Run synthetic pipeline test**. This injects an already-formed synthetic
+segment through the same Gradio submit event (it does not run the VAD model). The
+timeline reports segment handoff, backend validation, ASR audio-send/commit, ASR
+completion, and mocked reply completion. It includes stage names and elapsed times,
+not audio or transcript content.
+
 ## Try streaming German transcription
 
 Set `OPENAI_API_KEY` in the ignored `.env` file, then run:
