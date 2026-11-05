@@ -1,0 +1,47 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "zoo-basic",
+  "description": "The example from the brief: one cumulative entry over two turns.",
+  "tags": [
+    "happy-path",
+    "follow-up"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Heute war ich im Zoo.",
+          "audio_ms": 1800
+        }
+      ],
+      "intended": "Heute war ich im Zoo.",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": false,
+        "passage_contains": [
+          "Zoo"
+        ],
+        "reply_has_question": true
+      }
+    },
+    {
+      "segments": [
+        {
+          "asr_text": "Elefanten und einen ganz großen Löwen.",
+          "audio_ms": 2600
+        }
+      ],
+      "intended": "Ich habe Elefanten und einen ganz großen Löwen gesehen.",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": false,
+        "passage_contains": [
+          "Elefanten",
+          "Löwen"
+        ],
+        "reply_has_question": true
+      }
+    }
+  ]
+}

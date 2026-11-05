@@ -1,0 +1,27 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "ambiguous-reference",
+  "description": "Unclear who is meant: ask instead of guessing.",
+  "tags": [
+    "ambiguity",
+    "clarification"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Er hat ihn gesehen und dann ist er weggelaufen.",
+          "audio_ms": 3000
+        }
+      ],
+      "intended": "unclear",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": true,
+        "clarification_needed": true,
+        "reply_has_question": true
+      }
+    }
+  ]
+}

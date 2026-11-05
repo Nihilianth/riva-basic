@@ -1,0 +1,28 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "asr-silence-hallucination",
+  "description": "Boilerplate ASR produces on silence/noise is not journal content.",
+  "tags": [
+    "asr-error",
+    "noise"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Untertitel der Amara.org-Community",
+          "audio_ms": 1200
+        }
+      ],
+      "intended": "(nothing said)",
+      "expect": {
+        "journal_op": "none",
+        "flags": [
+          "asr_unclear"
+        ],
+        "reply_has_question": true
+      }
+    }
+  ]
+}

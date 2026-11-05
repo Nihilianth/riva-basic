@@ -1,0 +1,31 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "repetition-stutter",
+  "description": "Repeated words and fillers are removed without changing the meaning.",
+  "tags": [
+    "disfluency"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Ich ich war im im Zoo und und da war ähm ein Affe.",
+          "audio_ms": 3200
+        }
+      ],
+      "intended": "Ich war im Zoo und da war ein Affe.",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": false,
+        "passage_contains": [
+          "Zoo",
+          "Affe"
+        ],
+        "passage_forbids": [
+          "ähm"
+        ]
+      }
+    }
+  ]
+}

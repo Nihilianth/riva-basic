@@ -1,0 +1,28 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "asr-homophone-error",
+  "description": "ASR heard a similar word; a fix must be flagged uncertain, never silently invented.",
+  "tags": [
+    "asr-error"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Heute war ich im Zoo und habe eine Möwe mit einer großen Mähne gesehen.",
+          "audio_ms": 4300
+        }
+      ],
+      "intended": "Heute war ich im Zoo und habe einen Löwen mit einer großen Mähne gesehen.",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": true,
+        "passage_contains": [
+          "Zoo",
+          "Mähne"
+        ]
+      }
+    }
+  ]
+}

@@ -346,42 +346,7 @@ def add_reply_audio_route(api: FastAPI, replies: ReplyManager) -> None:
         )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--private-dir", type=Path, default=Path(os.environ.get("RIVA_PRIVATE_DIR", "../private"))
-    )
-    parser.add_argument("--port", type=int, default=7861)
-    parser.add_argument("--llm-model", default=os.environ.get("RIVA_LLM_MODEL", "gpt-4.1-mini"))
-    parser.add_argument("--tts-model", default=os.environ.get("RIVA_TTS_MODEL", "gpt-4o-mini-tts"))
-    parser.add_argument("--voice", default=os.environ.get("RIVA_TTS_VOICE", "coral"))
-    parser.add_argument(
-        "--vad-self-test",
-        action="store_true",
-        help="Run a synthetic VAD-segment-to-reply harness with mocked providers and no API key.",
-    )
-    args = parser.parse_args()
-    if not args.vad_self_test and not os.environ.get("OPENAI_API_KEY", "").strip():
-        parser.error("OPENAI_API_KEY missing. Run: uv run --env-file .env riva-voice-test")
-    if not 1 <= args.port <= 65535:
-        parser.error("Invalid port")
-    root = prepare_environment(args.private_dir)
-    if args.vad_self_test:
-        from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
-
-        sessions = AsrSessions(
-            RecordingStore(root / "research-data" / "vad-self-test"),
-            AsrConfig(),
-            SyntheticWire,
-        )
-        replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
-    else:
-        sessions = AsrSessions(RecordingStore(root / "research-data" / "voice-test"), AsrConfig())
-        replies = ReplyManager(
-            ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
-        )
-    demo = build_vad_app(sessions, replies, test_mode=args.vad_self_test)
-    playback_js = r"""
+PLAYBACK_JS = r"""
 window.rivaPlaybackInstalled = window.rivaPlaybackInstalled || false;
 if (!window.rivaPlaybackInstalled) {
   window.rivaPlaybackInstalled = true;
@@ -531,7 +496,10 @@ if (!window.rivaPlaybackInstalled) {
   }, 150);
 }
 """
-    import uvicorn
+
+
+def build_voice_api(demo: gr.Blocks, replies: ReplyManager) -> FastAPI:
+    """The FastAPI app: the Gradio page plus the playback, reply-audio and diagnostics routes."""
     from gradio.routes import mount_gradio_app
 
     demo.queue(max_size=64)
@@ -605,15 +573,56 @@ if (!window.rivaPlaybackInstalled) {
                 )
         return {"recorded": recorded}
 
-    api = mount_gradio_app(
+    mounted: FastAPI = mount_gradio_app(
         api,
         demo,
         path="/",
         app_kwargs={},
-        js=playback_js,
+        js=PLAYBACK_JS,
         max_file_size="30mb",
         show_error=False,
     )
+    return mounted
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--private-dir", type=Path, default=Path(os.environ.get("RIVA_PRIVATE_DIR", "../private"))
+    )
+    parser.add_argument("--port", type=int, default=7861)
+    parser.add_argument("--llm-model", default=os.environ.get("RIVA_LLM_MODEL", "gpt-4.1-mini"))
+    parser.add_argument("--tts-model", default=os.environ.get("RIVA_TTS_MODEL", "gpt-4o-mini-tts"))
+    parser.add_argument("--voice", default=os.environ.get("RIVA_TTS_VOICE", "coral"))
+    parser.add_argument(
+        "--vad-self-test",
+        action="store_true",
+        help="Run a synthetic VAD-segment-to-reply harness with mocked providers and no API key.",
+    )
+    args = parser.parse_args()
+    if not args.vad_self_test and not os.environ.get("OPENAI_API_KEY", "").strip():
+        parser.error("OPENAI_API_KEY missing. Run: uv run --env-file .env riva-voice-test")
+    if not 1 <= args.port <= 65535:
+        parser.error("Invalid port")
+    root = prepare_environment(args.private_dir)
+    if args.vad_self_test:
+        from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+        sessions = AsrSessions(
+            RecordingStore(root / "research-data" / "vad-self-test"),
+            AsrConfig(),
+            SyntheticWire,
+        )
+        replies = ReplyManager(ReplyConfig(), SyntheticReplyProvider)
+    else:
+        sessions = AsrSessions(RecordingStore(root / "research-data" / "voice-test"), AsrConfig())
+        replies = ReplyManager(
+            ReplyConfig(llm_model=args.llm_model, tts_model=args.tts_model, voice=args.voice)
+        )
+    demo = build_vad_app(sessions, replies, test_mode=args.vad_self_test)
+    import uvicorn
+
+    api = build_voice_api(demo, replies)
     if args.vad_self_test:
         print(
             f"Synthetic VAD self-test: http://localhost:{args.port}; no provider calls or API key"

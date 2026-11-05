@@ -22,11 +22,15 @@ riva-voice-test = "riva.experiments.voice_reply:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4,<5", "pytest>=8,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
+e2e = ["playwright>=1.50,<2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-markers = ["live: explicitly enabled tests that contact paid external providers"]
+markers = [
+    "live: explicitly enabled tests that contact paid external providers",
+    "browser: Playwright tests; need the e2e dependency group and an installed Chromium",
+]
 
 [tool.ruff]
 target-version = "py312"

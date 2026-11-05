@@ -1,0 +1,25 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "vocabulary-offer",
+  "description": "A fitting word the user may not know is offered inside the spoken reply.",
+  "tags": [
+    "education"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Der Elefant hat so eine lange Nase und damit hat er Wasser gespritzt.",
+          "audio_ms": 4600
+        }
+      ],
+      "intended": "Der Elefant hat mit seiner langen Nase Wasser gespritzt.",
+      "expect": {
+        "journal_op": "append",
+        "vocabulary_word": "Rüssel",
+        "reply_has_question": true
+      }
+    }
+  ]
+}

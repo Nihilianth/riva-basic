@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "incomplete-sentences",
+  "description": "Fragments from one thought merge into one turn; the journal must not invent the ending.",
+  "tags": [
+    "fragments",
+    "merge"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Ich bin gestern, also da war",
+          "audio_ms": 1500
+        },
+        {
+          "asr_text": "meine Schwester und wir sind zum",
+          "audio_ms": 1700
+        }
+      ],
+      "intended": "Gestern war ich mit meiner Schwester unterwegs.",
+      "expect": {
+        "journal_op": "append",
+        "uncertain": true,
+        "passage_forbids": [
+          "Zoo",
+          "Kino",
+          "Schwimmbad"
+        ],
+        "reply_has_question": true
+      }
+    }
+  ]
+}

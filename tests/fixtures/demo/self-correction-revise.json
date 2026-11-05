@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "self-correction-revise",
+  "description": "Explicit correction of the previous entry revises it.",
+  "tags": [
+    "revise"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Ich habe zwei Elefanten gesehen.",
+          "audio_ms": 2000
+        }
+      ],
+      "intended": "Ich habe zwei Elefanten gesehen.",
+      "expect": {
+        "journal_op": "append",
+        "passage_contains": [
+          "zwei",
+          "Elefanten"
+        ]
+      }
+    },
+    {
+      "segments": [
+        {
+          "asr_text": "Nein, es waren drei Elefanten.",
+          "audio_ms": 1800
+        }
+      ],
+      "intended": "Ich habe drei Elefanten gesehen.",
+      "expect": {
+        "journal_op": "revise",
+        "revise_target_turn": 0,
+        "passage_contains": [
+          "drei"
+        ],
+        "passage_forbids": [
+          "zwei"
+        ]
+      }
+    }
+  ]
+}

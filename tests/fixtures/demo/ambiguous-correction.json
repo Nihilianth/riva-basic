@@ -1,0 +1,39 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "scenario": "ambiguous-correction",
+  "description": "A correction without a clear target must not revise anything; the reply asks.",
+  "tags": [
+    "revise",
+    "ambiguity",
+    "clarification"
+  ],
+  "turns": [
+    {
+      "segments": [
+        {
+          "asr_text": "Ich habe Elefanten und Löwen gesehen. Danach habe ich ein Eis gegessen.",
+          "audio_ms": 4200
+        }
+      ],
+      "intended": "Ich habe Elefanten und Löwen gesehen. Danach habe ich ein Eis gegessen.",
+      "expect": {
+        "journal_op": "append"
+      }
+    },
+    {
+      "segments": [
+        {
+          "asr_text": "Nein, es waren vier.",
+          "audio_ms": 1400
+        }
+      ],
+      "intended": "unclear which number is meant",
+      "expect": {
+        "journal_op": "none",
+        "clarification_needed": true,
+        "reply_has_question": true
+      }
+    }
+  ]
+}
