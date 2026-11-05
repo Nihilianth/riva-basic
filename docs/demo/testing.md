@@ -68,16 +68,16 @@ correction, ASR homophone, stutter, follow-up). Run only with approval:
 It asserts schema compliance; meaning is judged from the saved results under
 `../private/research-data/demo-1/live-eval/`. Without `RIVA_RUN_LIVE_TESTS=1` it is skipped.
 
-## Real end-to-end smoke test (paid, needs approval - not run yet)
+## Real end-to-end smoke test (paid, opt-in; run once on 2026-11-05)
 
-`tests/demo/live/test_e2e_smoke.py` sends the synthetic clip `zoo.wav` through the real ASR, LLM and TTS
-once and writes per-stage latency (ASR total and its audio-sent/commit/completed stages, LLM, TTS first
-audio, end of speech to first audio) to `../private/research-data/demo-1/live-eval/`. Cost: a few cents. Run
-only after the user approves the paid calls:
-`RIVA_RUN_LIVE_TESTS=1 uv run --env-file .env pytest -m live tests/demo/live/test_e2e_smoke.py -s`.
-The measuring code (`tests/support/e2e.py`) is exercised offline with fakes in `tests/demo/test_e2e_measure.py`.
-Browser capture and playback latency are not part of this measurement (headless Chromium has no audible
-output); the demo must still be tried once with a real microphone and speakers before it is called ready.
+`tests/demo/live/test_e2e_smoke.py` runs a two-turn conversation (synthetic clips `zoo.wav`, then `elefanten.wav`
+as the answer to the follow-up) through the real ASR, LLM and TTS and writes per-stage latency and the budget
+to `../private/research-data/demo-1/live-eval/`. The cost is bounded by construction in `tests/support/e2e.py`
+(at most 3 ASR sessions, 6 LLM calls, 12 TTS phrases, 90 s of speech; worst case about $0.07) and was about $0.006.
+Run only with approval: `RIVA_RUN_LIVE_TESTS=1 uv run --env-file .env pytest -m live tests/demo/live/test_e2e_smoke.py -s`.
+Results and findings: `docs/demo/decisions.md`. The measuring code and the budget guard are tested offline
+(`tests/demo/test_e2e_measure.py`). Browser capture and playback latency are not part of it; headless Chromium has
+no audible output, so the demo still needs a manual hardware check.
 
 ## Fake microphone (real VAD against prerecorded speech)
 

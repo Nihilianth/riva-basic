@@ -102,3 +102,33 @@ Results are in the private archive (`research-data/demo-1/live-eval/`), not in G
 - **Revisions** stay conservative (see above); the low-grounding flag is a warning heuristic only.
 - **Not done on purpose**: the extended live LLM eval and the real end-to-end smoke test need the user's approval
   of the paid calls (`riva-skm.14`, `riva-skm.19`).
+
+## Real end-to-end smoke test (2026-11-05, user-approved, synthetic audio, budget EUR 1)
+Two-turn conversation on the real services (realtime ASR `gpt-live-transcribe`, `gpt-4.1-mini` structured turn,
+`gpt-4o-mini-tts` voice coral, persona Experte): turn 1 "Heute war ich im Zoo." (1.8 s), turn 2 "Elefanten und
+einen ganz großen Löwen." (3.7 s) as the answer to the follow-up question. Run once; details in the private
+archive (`research-data/demo-1/live-eval/e2e-smoke-*.json`). Browser capture and playback are NOT included.
+
+| Stage | Turn 1 | Turn 2 |
+|---|---|---|
+| ASR stage total (submit -> segment saved + final) | 4.8 s | 4.8 s |
+|  - connect + send audio (`asr.audio_sent`) | 1.7 s | 1.0 s |
+|  - final transcript available (`asr.completed`) | 2.9 s | 2.9 s |
+|  - waiting for the WebSocket to close | ~1.9 s | ~1.9 s |
+| LLM (one call, 1 attempt) | 4.2 s | 1.8 s |
+| TTS first audio (from reply start) | 1.9 s | 1.2 s |
+| **End of speech -> first reply audio ready** | **10.9 s** | **7.9 s** |
+| Reply audio produced | 5.0 s | 7.4 s |
+
+Browser adds on top: the VAD pause threshold (0.9 s default) before the segment is submitted, plus network and
+audio start; perceived delay is therefore roughly 9-12 s.
+- Quality: both transcripts exact; passages "Heute war ich im Zoo." and "Ich habe Elefanten und einen ganz großen
+  Löwen gesehen." (faithful, nothing added); both replies were short, German, relevant and ended with a question
+  (turn 2 referred to the elephants and the lion from the answer).
+- Failures/retries: none (1 LLM attempt per turn, no error codes, ASR and TTS completed).
+- Cost: 2 ASR sessions (5.5 s audio), 2 LLM calls (2,597 in / 216 out tokens), 4 TTS phrases (12.4 s audio) =
+  about **$0.006** by our approximate rates (actual billing was not inspected). The guard allows at most about
+  $0.07 in the worst case (3 ASR sessions, 6 LLM calls, 12 TTS phrases, 90 s speech).
+- **Finding (latency):** about 1.9 s of every ASR stage is waiting for the WebSocket close handshake: `LiveTurn`
+  sets `done` only after `wire.close()` although the transcript is final. Another 1.0-1.7 s is spent connecting
+  before audio is sent. Ticket created, not changed without the user's review.
