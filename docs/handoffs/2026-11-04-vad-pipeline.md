@@ -1,5 +1,7 @@
 # Handoff: Browser VAD segment pipeline
 
+> **Superseded by `2026-11-05-vad-pipeline.md`.** The problems described below were resolved.
+
 Date: 2026-11-04
 Repository: `/home/rmary/projects/riva/riva-basic`
 Beads: `riva-ojc` (active implementation), depends on `riva-0jw.5`.
