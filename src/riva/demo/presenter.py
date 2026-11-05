@@ -69,7 +69,13 @@ button#act-stop { background: #b91c1c !important; color: #ffffff !important; }
 .min_value, .max_value, .subdued { color: #374151 !important; }
 #pf-mic-result, #pf-tone-result { font-size: 1.1rem; font-weight: 600; min-height: 1.6rem; }
 """
-HEAD = "<script>document.documentElement.lang = 'de';</script>"
+HEAD = (
+    "<script>document.documentElement.lang = 'de';"
+    " if (window.matchMedia('(prefers-color-scheme: dark)').matches"
+    " && !location.search.includes('__theme'))"
+    " { location.replace(location.pathname + '?__theme=light'); }</script>"
+    '<meta name="color-scheme" content="light">'
+)
 MIC_IDLE = (
     '<p id="pf-mic-result" role="status" aria-live="polite">Mikrofon: noch nicht geprüft.</p>'
 )

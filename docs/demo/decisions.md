@@ -80,3 +80,25 @@ Results are in the private archive (`research-data/demo-1/live-eval/`), not in G
 - `low_grounding` (word overlap between a proposed text and what was said) is a **warning heuristic**, not a
   semantic correctness check: it can be wrong in both directions. It is only used to make the journal more
   cautious (block a revision, mark a passage uncertain), never to accept something as correct.
+
+## Phase 2 decisions (2026-11-05)
+- **Session lifecycle** (see architecture.md): creating and closing are separate. A reload is a new isolated
+  session; the old one is closed by an unload beacon (best effort), by the presenter's explicit reset (immediate),
+  by idle expiry (180 s without polling) or finally by Gradio's state cleanup. Closed sessions stay as records,
+  reject stale results and are never recreated.
+- **Presenter page** on the same server at `/presenter/` (German, same machine). Settings apply to NEW sessions;
+  "apply to the selected session" changes the next LLM call and voice only (core rules never change). The pause
+  threshold (500-3000 ms) is served at `/riva/settings` and read when a participant presses Start.
+- **Alles anhalten** bumps a per-session counter that the participant page watches, so audio already buffered in
+  the browser stops too (a server-side cancel alone would not).
+- **Pre-flight**: three kinds - automatic (free probes), interactive (microphone permission, test tone) and paid
+  (one real TTS request after a confirmation tick). Voice availability can only really be proven by the paid test.
+- **Voice previews**: one fixed German sentence, cached per model+voice+sentence; the first preview of a voice is
+  one TTS request. Previews are never generated at start-up; the presenter can prepare all after a cost tick.
+- **Light theme only**: the colors and contrast fixes are designed for the light theme; a dark system setting is
+  redirected to `?__theme=light` on both pages.
+- **Participant introduction**: plain text "So geht's" with four steps and "Ich bin ein Computer-Programm, kein
+  Mensch." No audio or microphone before Start (tested).
+- **Revisions** stay conservative (see above); the low-grounding flag is a warning heuristic only.
+- **Not done on purpose**: the extended live LLM eval and the real end-to-end smoke test need the user's approval
+  of the paid calls (`riva-skm.14`, `riva-skm.19`).

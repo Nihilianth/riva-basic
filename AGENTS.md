@@ -34,9 +34,10 @@ unless a dependency provides clear value. Package code lives in `src/riva`.
 ## Demo 1 (epic `riva-skm`)
 
 Docs: `docs/demo/{README,architecture,testing,decisions}.md`. Behavior truth = code and tests; task status =
-Beads; docs explain how and why. Run tests with `uv run pytest -q`; browser tests need
+Beads; docs explain how and why. Run: `uv run riva-demo --fake` (offline) or `uv run --env-file .env riva-demo`;
+pages `/` (participant) and `/presenter/`. Tests: `uv run pytest -q`; browser tests need
 `uv sync --locked --group e2e` (see `docs/demo/testing.md`). Network access is blocked in non-`live` tests;
-paid/live calls need explicit user approval.
+paid/live calls (`tests/demo/live/`) need explicit user approval.
 
 ## Skills (`.claude/skills/`)
 

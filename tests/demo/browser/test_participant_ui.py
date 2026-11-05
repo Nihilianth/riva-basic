@@ -323,3 +323,24 @@ def test_choosing_a_voice_plays_a_cached_preview_and_is_used_for_the_next_reply(
         page.get_by_role("button", name="▶ Start").click()
         page.wait_for_function("window.__phases.includes('speaking')", timeout=90_000)
         assert voices_used[-1] == "marin"  # the reply is spoken in the chosen voice
+
+
+def test_a_dark_system_setting_does_not_change_the_page(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance, color_scheme="dark") as context,
+    ):
+        page = context.new_page()
+        page.goto(app.url)
+        page.get_by_role("button", name="▶ Start").wait_for(timeout=30_000)
+        assert "__theme=light" in page.url
+        assert page.evaluate("document.body.classList.contains('dark')") is False
+        assert page.evaluate(
+            "getComputedStyle(document.getElementById('riva-status')).backgroundColor"
+        ) == ("rgb(243, 244, 246)")
+        presenter = context.new_page()
+        presenter.goto(app.url + "/presenter/")
+        presenter.get_by_role("button", name="Automatisch prüfen").wait_for(timeout=30_000)
+        assert "__theme=light" in presenter.url

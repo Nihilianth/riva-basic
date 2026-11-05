@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
     from riva.demo.app import DemoRuntime
 
-HEAD = "<script>document.documentElement.lang = 'de';</script>"
+HEAD = (
+    "<script>document.documentElement.lang = 'de';"
+    " if (window.matchMedia('(prefers-color-scheme: dark)').matches"
+    " && !location.search.includes('__theme'))"
+    " { location.replace(location.pathname + '?__theme=light'); }</script>"
+    '<meta name="color-scheme" content="light">'
+)  # the colors are designed for the light theme; a dark system setting must not change them
 
 CSS = """
 .gradio-container { max-width: 960px !important; margin: 0 auto; font-size: 1.25rem; }

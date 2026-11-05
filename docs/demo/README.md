@@ -59,3 +59,23 @@ uv run --group e2e playwright install chromium    # once; see testing.md for lib
 uv run python scripts/fetch_browser_test_assets.py  # once: cached VAD files (free)
 ```
 Private outputs (recordings, transcripts, logs) go to `../private/`, never into Git. Never read or commit `.env`.
+
+## Before the demo (checklist)
+
+Automated tests cannot cover these; do them once on the real laptop, headset/speakers and network:
+1. `uv run --env-file .env riva-demo`, open `/presenter/`, press **Automatisch prüfen**: everything automatic is
+   green (key, models, speech recognition, archive folder).
+2. **Mikrofon prüfen** and **Testton abspielen** in the browser you will use (Chrome recommended); confirm you hear it.
+3. Prepare the voices once (**Alle Stimmen vorbereiten**, a few cents) and run **Stimmtest** for the chosen voice.
+4. Do one full conversation with the real microphone and the real speakers: check the hearing/thinking/speaking
+   indicator, the journal text, Stopp, and speaking over a reply. Use a headset if the speakers feed back into the
+   microphone (echo is untested).
+5. Run the paid end-to-end smoke test (`docs/demo/testing.md`) if you want measured latency.
+6. Consent for recording, and retention/deletion of `../private/research-data/demo-1/`, are your responsibility.
+
+## Known limits
+
+Experimental, not participant-ready. Not verified: real microphones and their processing, speaker echo, audible
+audio quality and gaps, atypical-speech ASR accuracy, browsers other than Chromium/Chrome, venue network. End-to-end
+latency with the real services is unmeasured until the opt-in smoke test is approved and run. The presenter page has
+no login (it listens on 127.0.0.1 only). Reloading a page ends its session; the journal is not carried over.
