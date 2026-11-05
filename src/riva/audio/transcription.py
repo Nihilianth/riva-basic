@@ -142,7 +142,12 @@ class LiveTurn:
         self.factory = factory
         self.lock = threading.RLock()
         self.commands: queue.Queue[npt.NDArray[np.float32] | None] = queue.Queue(maxsize=64)
+        # Two separate lifecycle states: ``done`` = the transcript is final (or failed) and callers
+        # may continue; ``connection_closed`` = the WebSocket is gone. Closing takes up to
+        # ``close_timeout`` and runs after ``done`` in the worker, tracked by ``connection_state``.
         self.done = threading.Event()
+        self.connection_closed = threading.Event()
+        self.connection_state = "connecting"  # connecting | open | closing | closed | close_failed
         self.cancelled = threading.Event()
         self.audio_sent = threading.Event()
         self.commit_sent = threading.Event()
@@ -222,8 +227,36 @@ class LiveTurn:
         return self.snapshot()
 
     def close(self) -> None:
+        """Cancel; wait (bounded) only while the transcript is still being produced.
+
+        A socket that is merely closing after a final transcript is finished by the worker;
+        see ``wait_closed``.
+        """
         self.cancelled.set()
-        self.worker.join(timeout=3)
+        if not self.done.is_set():
+            self.worker.join(timeout=3)
+
+    def wait_closed(self, timeout: float) -> bool:
+        """Wait (bounded) until the WebSocket is closed. False if it is still closing."""
+        return self.connection_closed.wait(timeout)
+
+    def _set_connection(self, state: str) -> None:
+        with self.lock:
+            self.connection_state = state
+
+    def _release_connection(self, wire: Wire | None) -> None:
+        """Close the socket after the result is final; never raises, always ends final."""
+        if wire is None:
+            self._set_connection("closed")  # it never opened: nothing to clean up
+        else:
+            self._set_connection("closing")
+            try:
+                wire.close()
+            except Exception:
+                self._set_connection("close_failed")
+            else:
+                self._set_connection("closed")
+        self.connection_closed.set()
 
     def _event(self, event: dict[str, Any], commit_sent: bool) -> None:
         kind = event.get("type", "")
@@ -260,6 +293,7 @@ class LiveTurn:
         wire: Wire | None = None
         try:
             wire = self.factory()
+            self._set_connection("open")
             wire.send(json.dumps(self.config.update_event()))
             ready_deadline = time.monotonic() + 10
             while not self.cancelled.is_set():
@@ -337,7 +371,5 @@ class LiveTurn:
             # authentication details. Only this fixed code leaves the worker.
             self.fail("connection_failed")
         finally:
-            if wire is not None:
-                with suppress(Exception):
-                    wire.close()
-            self.done.set()
+            self.done.set()  # the transcript is final: nobody has to wait for the closing handshake
+            self._release_connection(wire)

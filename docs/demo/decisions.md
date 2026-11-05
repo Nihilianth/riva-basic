@@ -150,3 +150,25 @@ no late audio, committed journal entries and the audit trail are kept, and the p
 ("Gestoppt"). Start resumes. A processing acknowledgement (animated bar, and a note after 4 s) makes long waits
 understandable. Known TTS/ASR retirement dates stay in `docs/handoffs` and `riva-ddc` (Speech API shutdown
 2027-01-06).
+
+## ASR latency: Proposal A implemented and measured (2026-11-05, riva-42l)
+`LiveTurn` now has two separate lifecycle states: `done` (the transcript is final or failed; callers continue) and
+`connection_closed` with `connection_state` (connecting, open, closing, closed, close_failed). The worker sets `done`
+first, then closes the socket (`_release_connection`: never raises, always ends in a final state, bounded by the
+2 s `close_timeout`). `LiveTurn.close()` waits (3 s bound) only while the transcript is still being produced;
+`wait_closed(timeout)` waits for the socket; `AsrSessions.close_all(timeout)` cancels every turn and waits on a shared
+deadline, returning how many sockets were still closing; `DemoRuntime.shutdown()` (registered as the server's shutdown
+handler) closes sessions and then calls it. Cancellation, errors, Stopp and session isolation behave as before; a
+Stopp or the next utterance never waits for a closing socket (tested). Proposal B (pre-connect) stays deferred.
+
+Real two-turn smoke test (same synthetic clips and procedure as the baseline; est. cost $0.0079 and $0.0072):
+
+| Metric | Baseline (before) | After, run 1 | After, run 2 |
+|---|---|---|---|
+| ASR stage, turn 1 / turn 2 | 4.8 s / 4.8 s | 2.6 s / 2.3 s | 2.3 s / 2.5 s |
+| gap between "transcript final" and stage end | 1.9 s / 1.9 s | 0 s / 0 s | 0 s / 0 s |
+| LLM, turn 1 / turn 2 (provider variance) | 4.2 s / 1.8 s | 3.9 s / 1.2 s | 2.8 s / 1.4 s |
+| TTS time to first audio | 1.9 s / 1.2 s | 1.4 s / 1.2 s | 1.4 s / 1.1 s |
+| **End of speech -> first audio ready** | **10.9 s / 7.9 s** | **7.9 s / 4.7 s** | **6.5 s / 5.0 s** |
+Transcripts identical, one LLM attempt per turn, no errors. Saving of about 2.2-2.5 s per turn from A itself; the rest
+of the difference is LLM/TTS variance. Browser VAD pause and playback start are not included.

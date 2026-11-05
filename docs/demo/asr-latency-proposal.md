@@ -1,8 +1,8 @@
 # ASR latency: proposal for review (riva-42l)
 
-Status: **proposal only. Nothing in the shared ASR code (`src/riva/audio/transcription.py`) has been changed.**
-Please review before anything is merged; it affects the developer apps (manual app 7860, VAD app 7861) as
-well as the demo.
+Status: **Proposal A approved, implemented and measured (2026-11-05); Proposal B deferred.** Results are in
+`decisions.md`. It touches the shared ASR code, so it affects the developer apps (manual app 7860, VAD app 7861) as
+well as the demo. The original proposal text follows.
 
 ## Evidence (real services, 2026-11-05, see `decisions.md`)
 Per turn the ASR stage took 4.8 s, of which:

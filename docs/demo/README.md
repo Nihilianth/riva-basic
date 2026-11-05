@@ -100,8 +100,10 @@ timeline - lives in ONE folder: `../private/research-data/demo-1/<user>/<session
 To remove all demo data: stop the demo, then delete the folder `../private/research-data/demo-1/` yourself.
 What the tool does **not** cover: your own backups or copies, data kept by the providers under their own policies
 (requests use `store=False`; audio/transcription terms are OpenAI's), the voice-preview cache
-(`demo-1-cache`, not participant data) and any copy in `${GRADIO_TEMP_DIR:-/tmp/gradio}` (the demo itself does
-not put audio there). Ordinary logs and the terminal contain ids only, never content.
+(`demo-1-cache`, not participant data) and Gradio's cache `../private/gradio-cache` (the developer apps copy audio there; the demo itself
+does not). Ordinary logs and the terminal contain ids only, never content.
+
+Manual hardware and usability check, with the exact commands and URLs: `docs/demo/manual-test.md`.
 
 ## Before the demo (checklist)
 

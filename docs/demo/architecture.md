@@ -139,3 +139,11 @@ the server phase. A stage that was stopped never sets an error or the phase (`se
 utterance waits until the interrupted one is saved (`_await_previous_turn`), so the audio of the interrupted
 utterance is kept. Presenter "Alles anhalten" calls the same `interrupt()` and the page reacts to the `stop_seq`
 counter with the same `rivaStopAll`.
+
+## ASR lifecycle: readiness is not connection closure (`LiveTurn`)
+`done` means the transcript is final (or the turn failed) and callers continue; `connection_closed` /
+`connection_state` track the WebSocket separately. After `done` the worker closes the socket in the background
+(`_release_connection`, bounded by `close_timeout`), so saving and replying no longer wait for the closing handshake.
+Bounded cleanup: `close()` joins only while a transcript is still pending; `wait_closed()`, `AsrSessions.close_all()` and
+`DemoRuntime.shutdown()` (server shutdown handler) wait on a deadline and report what is still closing. The threads
+are daemons, so a hung close cannot keep the process alive.

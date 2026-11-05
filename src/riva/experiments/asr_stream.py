@@ -209,6 +209,17 @@ class AsrSessions:
             duration = turn.live.frames / turn.live.source_rate if turn.live.source_rate else 0
         return turn.live.snapshot(), duration
 
+    def close_all(self, timeout: float = 5.0) -> int:
+        """Shutdown: cancel every turn and wait (bounded, shared deadline) for the sockets to close.
+
+        Returns how many connections were still closing when the time ran out."""
+        with self.lock:
+            lives = [turn.live for turn in self.turns.values()]
+        for live in lives:
+            live.cancelled.set()
+        deadline = time.monotonic() + timeout
+        return sum(not live.wait_closed(max(0.0, deadline - time.monotonic())) for live in lives)
+
     def release(self, identity: SessionIdentity) -> None:
         with self.lock:
             turn = self.turns.pop(identity.session_id, None)

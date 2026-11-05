@@ -155,6 +155,14 @@ commit**; audit trail and indicator state. `tests/demo/browser/test_stopp_stages
 real VAD and the fake microphone - recording (nothing submitted or saved), ASR, LLM, TTS preparation, playback
 (`test_participant_ui.py`), resuming with Start, and the processing acknowledgement.
 
+## ASR lifecycle tests (`tests/test_asr_lifecycle.py`, riva-42l)
+
+Transcript ready while the socket is still closing; provider error is final and still closes; cancelling closes within a
+bound; a hanging close is tracked and never blocks `close()` or the caller; a failing close is contained
+(`close_failed`, no leaked text); a connection that never opened has nothing to close; `close_all` is bounded and
+reports stragglers; Stopp and the next utterance do not wait for a closing socket; runtime shutdown closes sessions.
+The old assertion that the wire is closed right after `finish()` now waits for `wait_closed()`.
+
 ## Local-only and deletion tests
 
 `tests/demo/test_presenter.py` (loopback-only presenter, 403 for others, no `--host` option, bind address

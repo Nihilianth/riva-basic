@@ -103,6 +103,8 @@ def test_streaming_turn_uses_one_connection_and_commits_after_audio() -> None:
         assert types.count("input_audio_buffer.commit") == 1
         pcm = b"".join(base64.b64decode(e["audio"]) for e in wire.sent if "audio" in e)
         assert len(pcm) == 24000 * 2
+        # Closing the socket is a separate, later lifecycle state than "transcript final".
+        assert turn.wait_closed(2) and turn.connection_state == "closed"
         assert wire.closed
         assert turn.finish() == result
     finally:

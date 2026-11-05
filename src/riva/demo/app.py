@@ -153,6 +153,15 @@ class DemoRuntime:
         else:
             self.asr.release(identity)
 
+    def shutdown(self, timeout: float = 5.0) -> int:
+        """Server stop: close every session, then wait (bounded) for outstanding ASR sockets.
+
+        Returns how many connections were still closing when the time ran out (daemon threads
+        finish them; the process does not hang on them)."""
+        for session in self.active():
+            session.close("shutdown")
+        return self.asr.close_all(timeout)
+
     def _prune_closed(self) -> None:
         closed = [sid for sid, s in self.sessions.items() if s.closed]
         for sid in closed[:-KEEP_CLOSED] if len(closed) > KEEP_CLOSED else []:
@@ -257,6 +266,7 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
                                                   "footer_links": [], "show_error": False})],
     )  # fmt: skip
     api.add_middleware(LocalOnlyPresenter)
+    api.router.on_shutdown.append(runtime.shutdown)
     return api
 
 
