@@ -103,6 +103,16 @@ a new one; a failing ASR shows the friendly error and recovers; a failing LLM ke
 focus outline and Enter starts; **axe-core** (WCAG 2 A/AA, cached by `fetch_browser_test_assets.py`) reports
 no serious or critical violation. Contrast fixes found by axe are in `riva.demo.ui.CSS`.
 
+## Conversation tests (`tests/demo/browser/test_demo_conversation.py`)
+
+Whole conversations in the demo app with the fake microphone: two utterances build a two-paragraph journal
+and the second prompt carries the first passage and the earlier exchange; a fragmented utterance (pause
+longer than the VAD threshold, slow ASR) is held and becomes ONE LLM call and ONE journal entry while the
+"heard" tab shows both fragments; speaking over a reply suspends it and the next prompt says it was "nicht
+ganz gehört"; background noise never reaches the journal; the private archive on disk holds the timeline,
+the verbatim ASR, the journal and the audio/transcript files, while the ordinary log (stdout) contains no
+transcript text. Shared helpers: `tests/support/{audio,fakes,server,ui,demo,scripted,conversations}.py`.
+
 ## Embedded JavaScript
 
 The page scripts live in Python strings (`VAD_BROWSER_JS`, `PLAYBACK_JS`).
