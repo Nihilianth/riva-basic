@@ -32,12 +32,16 @@ def words(text: str) -> list[str]:
 
 
 def looks_german(text: str) -> bool:
-    """Heuristic only: more German than English function words, and some German ones present."""
+    """Heuristic: reject text that is clearly English; accept short texts that show no English.
+
+    Short passages ("Große graue Elefanten.") may contain no function words at all, so a German
+    stopword is only required once the text is long enough to expect one.
+    """
     tokens = [word.casefold() for word in words(text)]
     german = sum(token in GERMAN_STOPWORDS for token in tokens)
     english = sum(token in ENGLISH_STOPWORDS for token in tokens)
-    if len(tokens) < 3:
-        return english == 0
+    if len(tokens) < 6:
+        return english <= german
     return german >= 1 and german > english
 
 

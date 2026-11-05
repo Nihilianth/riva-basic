@@ -45,3 +45,14 @@ provider exception (no retry, message discarded), the outcome is the German fall
 verbatim transcript as the journal passage (marked uncertain). `Providers` bundles the LLM, speech
 synthesizer and ASR wire factory: `real_providers()` (OpenAI, paid) or `fake_providers()` (offline).
 `SpokenReplyProvider` lets the existing `ReplyRun` stream an already-decided reply to TTS.
+
+## Journal (`riva.demo.journal`)
+Append-only `Passage` list (`p0`, `p1`, ...; text, turn id, source llm|verbatim_fallback, uncertain flag,
+`revisions` history). `Journal.apply(outcome, turn_id)` is the only mutation:
+- `append` adds the passage for the current utterance; a fallback outcome appends the verbatim transcript
+  (marked uncertain). `none` changes nothing.
+- `revise` replaces one of the last 5 passages **only if** the turn is not uncertain and has no `low_grounding`
+  flag and the target is in the window; the old text stays in `revisions`. Otherwise nothing changes and a
+  clarification is spoken (the model's reply if it already asks a question, else a fixed German sentence).
+- `tail()` / `revisable_ids()` give the LLM the window; `text()` renders one paragraph per passage;
+  `snapshot()` is JSON for the session archive.

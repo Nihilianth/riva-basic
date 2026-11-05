@@ -188,3 +188,6 @@ def test_language_heuristic() -> None:
     assert looks_german("Das war bestimmt schön. Was hast du dort gesehen?")
     assert not looks_german("That was probably nice. What did you see there?")
     assert looks_german("Ja!") and not looks_german("Yes the")
+    # Short German passages without any function word must not be rejected.
+    assert looks_german("Große graue Elefanten.") and looks_german("Satz 0 neu.")
+    assert not looks_german("Big grey elephants are here.")
