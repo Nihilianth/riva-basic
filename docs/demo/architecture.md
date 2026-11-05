@@ -35,3 +35,13 @@ The developer voice app and the demo share these pieces; behavior is covered by 
   transcript is held; otherwise held + new text are merged into one turn (`TurnDecision`).
 - `vad_segment_updates()`: the developer-UI wrapper (reply streaming and its tuple outputs).
 - `ReplyManager.start(..., config)`: a per-session `ReplyConfig` (voice, `tts_style`, models) overrides the default.
+
+## Turn processing (`riva.demo.turn`, `providers`, `fakes`, `openai_llm`)
+`TurnProcessor.process(context, persona_id, model, revisable_ids)` builds instructions (core + persona) and
+the per-turn input, calls the injected `TurnLLM`, validates the result (`schema.validate_turn`) and returns a
+`TurnOutcome` (`source` llm|fallback, `spoken_reply`, `journal_op`, soft flags, attempts, error codes, latency,
+token usage). An invalid result is retried once with a hint naming the error code; after that, or after any
+provider exception (no retry, message discarded), the outcome is the German fallback reply plus the
+verbatim transcript as the journal passage (marked uncertain). `Providers` bundles the LLM, speech
+synthesizer and ASR wire factory: `real_providers()` (OpenAI, paid) or `fake_providers()` (offline).
+`SpokenReplyProvider` lets the existing `ReplyRun` stream an already-decided reply to TTS.
