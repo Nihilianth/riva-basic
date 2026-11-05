@@ -31,6 +31,14 @@ uv build
 Use Python 3.12+, typed boundaries, small modules, and standard-library facilities
 unless a dependency provides clear value. Package code lives in `src/riva`.
 
+## Skills (`.claude/skills/`)
+
+- `create-issue`: researching and writing fully scoped Beads issues (`bd create`) with acceptance criteria.
+- `debug-analysis`: reviewing a pasted system prompt or instruction block for contradictions and errors.
+- `doc-maintenance`: editing AGENTS.md, skill descriptions, handoffs or other agent-facing docs; the
+  spec is `docs/AGENT_DOC_RESEARCH.md` (sections 7-8 describe another repo, not RIVA).
+- After changing a skill description, run `python3 .claude/skills/check_skill_triggers.py`.
+
 ## Scope and architecture
 
 - Prototype: Gradio native audio first, OpenAI ASR → text orchestration → TTS.
