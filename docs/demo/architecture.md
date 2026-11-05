@@ -18,3 +18,10 @@ ephemeral port with fake providers.
 
 `PLAYBACK_JS` exposes read-only `window.rivaPlayerStats` (`counts` per stage, `chunks`, `ctx`) next to the
 stage line; browser tests and operators can read how the player behaved without audio output.
+
+## `riva.demo` package (so far)
+- `text.py`: German heuristics (`looks_german`), tolerant word matching, `grounding_score`.
+- `schema.py`: turn schema, `parse_turn` (structure), `validate_turn` (hard gates + soft flags).
+- `config.py` + `defaults/*.toml`: personas, models, voices, limits (validated).
+- `prompts.py`: `build_instructions(core + persona)` and `build_input(TurnContext)`.
+Not yet built: processor with provider interfaces, journal, session lifecycle, archive, UI.

@@ -1,0 +1,21 @@
+# Models, voices and limits offered to the presenter. Edit freely; read at start-up.
+
+[llm]
+default = "gpt-4.1-mini"
+# Non-reasoning chat models that support strict structured output. Validate new ones with the live eval.
+models = [
+    { id = "gpt-4.1-mini", label = "GPT-4.1 mini (schnell)" },
+    { id = "gpt-4.1", label = "GPT-4.1 (genauer)" },
+]
+
+[tts]
+model = "gpt-4o-mini-tts"
+default_voice = "coral"
+voices = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
+# The same short German sentence is used for every voice preview.
+preview_sentence = "Hallo! So klinge ich. Wollen wir zusammen dein Tagebuch schreiben?"
+
+[limits]
+history_exchanges = 6      # recent conversation turns given to the LLM
+journal_tail = 5           # how many latest journal entries the LLM may revise
+llm_timeout_seconds = 30
