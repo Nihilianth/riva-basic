@@ -121,3 +121,8 @@ from disk afterwards; one lock per voice means concurrent requests cost one synt
 /riva/voice_preview/<voice>` serves it (404 for voices outside the allowlist, 502 without provider detail).
 The participant dropdown calls `rivaPlayPreview` on a user choice and updates the session's voice; the
 presenter can prepare all previews after a cost confirmation, and the pre-flight shows how many are cached.
+
+## Local-only guard (`riva.demo.app.LocalOnlyPresenter`)
+`HOST = "127.0.0.1"` is the only bind address (no CLI option). An ASGI middleware additionally answers
+`/presenter*` (HTTP and WebSocket) with 403 unless the client address is loopback. It is defense in depth, not
+access control: behind a reverse proxy on the same machine every client looks like loopback.

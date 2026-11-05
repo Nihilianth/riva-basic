@@ -62,6 +62,11 @@ UNHEARD_JS = (
 )
 CSS = """
 .gradio-container { max-width: 1200px !important; margin: 0 auto; }
+/* Gradio's JSON viewer colors fail WCAG contrast; found by axe once the timeline has content. */
+.json-node .key { color: #7c2d12 !important; }
+.json-node .value.string { color: #14532d !important; }
+.json-node .value.number { color: #1e3a8a !important; }
+.json-node .value.boolean, .json-node .value.null { color: #581c87 !important; }
 button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible {
   outline: 4px solid #1d4ed8 !important; outline-offset: 2px !important; }
 button#pf-run { background: #166534 !important; color: #ffffff !important; }

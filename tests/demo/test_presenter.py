@@ -68,7 +68,7 @@ def test_pause_threshold_is_bounded_and_served_to_the_page(tmp_path) -> None:
 
 def test_both_pages_are_served_on_one_server(tmp_path) -> None:
     rt, _ = make_runtime(tmp_path)
-    client = TestClient(build_demo_api(rt))
+    client = TestClient(build_demo_api(rt), client=("127.0.0.1", 5000))
     participant, presenter_page = client.get("/"), client.get("/presenter/")
     assert participant.status_code == 200 and presenter_page.status_code == 200
     assert "Mein Tagebuch" in participant.text and "Vorführenden-Seite" in presenter_page.text
@@ -134,3 +134,36 @@ def test_closed_sessions_stay_visible_with_their_reason(tmp_path) -> None:
     rt.reset(session.identity.session_id)
     assert presenter.session_rows(rt)[0][1] == "beendet (presenter_reset)"
     assert presenter.session_choices(rt)[0][0].endswith("(beendet)")
+
+
+def test_the_presenter_answers_loopback_clients_only(tmp_path) -> None:
+    rt, _ = make_runtime(tmp_path)
+    api = build_demo_api(rt)
+    for host in ("127.0.0.1", "::1"):
+        assert TestClient(api, client=(host, 5000)).get("/presenter/").status_code == 200
+    for host in ("203.0.113.9", "192.168.1.20", "10.0.0.5", "2001:db8::1", "testclient"):
+        remote = TestClient(api, client=(host, 5000))
+        for method, path in (("get", "/presenter/"), ("get", "/presenter/gradio_api/info"),
+                             ("post", "/presenter/gradio_api/queue/join")):  # fmt: skip
+            response = getattr(remote, method)(path)
+            assert response.status_code == 403 and "lokal" in response.text, (host, path)
+    # the participant routes are not presenter routes
+    remote = TestClient(api, client=("203.0.113.9", 5000))
+    assert remote.get("/riva/settings").status_code == 200
+
+
+def test_the_server_binds_to_loopback_and_offers_no_host_option(tmp_path, monkeypatch) -> None:
+    import sys
+
+    import uvicorn
+
+    from riva.demo import app as demo_app
+
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda api, **kw: seen.update(kw))
+    monkeypatch.setattr(sys, "argv", ["riva-demo", "--fake", "--private-dir", str(tmp_path / "p")])
+    demo_app.main()
+    assert seen["host"] == "127.0.0.1" == demo_app.HOST
+    monkeypatch.setattr(sys, "argv", ["riva-demo", "--fake", "--host", "0.0.0.0"])
+    with pytest.raises(SystemExit):  # there is deliberately no way to expose the demo from the CLI
+        demo_app.main()

@@ -1,6 +1,5 @@
 """The presenter page in headless Chromium: checks, settings, sessions, reset, stop."""
 
-import time
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,7 @@ from support.ui import LISTENING, SlowTone, load
 
 from riva.demo.fakes import EchoTurnLLM, FakeProbe
 from riva.demo.providers import Providers
-from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+from riva.experiments.vad_self_test import SyntheticWire
 
 
 def demo(tmp_path: Path, probe: FakeProbe | None = None, seconds: int = 1) -> Any:
@@ -160,9 +159,10 @@ def test_alles_anhalten_stops_the_spoken_reply_on_the_participant_page(
         assert not participant.evaluate("window.rivaIsPlaying()")
 
 
-def test_the_presenter_page_has_no_serious_accessibility_problems(
+def test_the_only_accessibility_exception_is_the_known_gradio_empty_table_placeholder(
     tmp_path: Path, playwright_instance: Any
 ) -> None:
+    """Scan WITHOUT any exclusion; the single tolerated finding is Gradio's own ".empty" element."""
     import pytest
 
     axe = Path("~/.cache/riva-browser-test-assets/axe-core@4.10.2/axe.min.js").expanduser()
@@ -171,42 +171,32 @@ def test_the_presenter_page_has_no_serious_accessibility_problems(
     with demo(tmp_path) as app, mic_browser(playwright_instance) as context:
         page = open_presenter(context, app)
         page.add_script_tag(path=str(axe))
-        # Gradio's own empty-table placeholder (".empty") carries a prohibited aria attribute that
-        # we cannot change; everything else on the page is checked.
         result = page.evaluate(
-            "axe.run({exclude: [['.empty']]}, "
-            "{runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']}})"
+            "axe.run(document, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']}})"
         )
-        serious = [
-            (v["id"], v["impact"], [n["target"] for n in v["nodes"]][:3])
+        findings = [
+            (v["id"], sorted({str(n["target"]) for n in v["nodes"]}))
             for v in result["violations"]
             if v["impact"] in ("serious", "critical")
         ]
-        assert serious == [], serious
-        time.sleep(0)
-
-
-def test_preparing_all_voices_needs_the_cost_confirmation(
-    tmp_path: Path, playwright_instance: Any
-) -> None:
-    class FastTone(SlowTone):
-        def speech(self, phrase: str, config: Any) -> Any:
-            yield from SyntheticReplyProvider.speech(self, phrase, config)
-
-    providers = Providers(EchoTurnLLM(), FastTone(), SyntheticWire)
-    with (
-        running_demo_app(tmp_path, providers, probe=FakeProbe()) as app,
-        mic_browser(playwright_instance) as context,
-    ):
-        page = open_presenter(context, app)
-        page.get_by_role("button", name="Alle Stimmen vorbereiten (kostet Geld)").click()
-        page.get_by_text("Bitte zuerst bestätigen").first.wait_for(timeout=10_000)
-        assert app.runtime.voices.generated == 0
-        page.get_by_label("Ja, die Kosten (wenige Cent) sind in Ordnung").check()
-        page.get_by_role("button", name="Alle Stimmen vorbereiten (kostet Geld)").click()
-        page.get_by_text("10 neu erzeugt, 0 waren schon vorhanden").wait_for(timeout=20_000)
-        assert app.runtime.voices.cached_count() == 10
+        # Known, upstream (Gradio Dataframe empty state): aria-prohibited-attr on ".empty" only.
+        assert [f for f in findings if f != ("aria-prohibited-attr", ["['.empty']"])] == [], (
+            findings
+        )
+        # ... and it vanishes once the tables have content, so it is not hiding anything else.
+        participant = context.new_page()
+        participant.goto(app.url)
+        participant.wait_for_function("window.rivaSessionId", timeout=20_000)
+        page.wait_for_function(
+            "document.querySelector('#sessions').innerText.includes('aktiv')", timeout=15_000
+        )
         page.get_by_role("button", name="Automatisch prüfen").click()
-        page.locator("#pf-table").get_by_text("Alle 10 Vorschauen sind da.").wait_for(
+        page.locator("#pf-table").get_by_text("Sitzungsordner beschreibbar").wait_for(
             timeout=15_000
         )
+        again = page.evaluate(
+            "axe.run(document, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']}})"
+        )
+        assert [
+            v["id"] for v in again["violations"] if v["impact"] in ("serious", "critical")
+        ] == []

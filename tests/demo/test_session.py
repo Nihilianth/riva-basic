@@ -262,3 +262,29 @@ def test_a_revision_is_recorded_with_its_utterance_in_the_journal_snapshot(tmp_p
     assert passage["text"] == "Ich habe drei Elefanten gesehen."
     assert passage["revisions"][0]["previous_text"] == "Ich habe zwei Elefanten gesehen."
     assert passage["revisions"][0]["utterance_text"] == "Nein, es waren drei Elefanten."
+
+
+def test_stopp_while_the_model_is_still_thinking_does_not_cancel_the_coming_reply(tmp_path) -> None:
+    """Stopp acts on a reply that exists (synthesized or playing), not on one still to come."""
+    h = make_harness(tmp_path, gated_llm=True)
+    h.synth.release.set()
+    thread, box = run_in_thread(h.answer, "Hallo")
+    assert h.llm.entered.wait(5)
+    assert h.session.stop_speech() is False  # no reply yet: nothing to stop
+    assert h.session.stop_seq == 1  # the page is still told (it has nothing playing)
+    h.llm.release.set()
+    thread.join(5)
+    report = box["result"]
+    finish_run(report.run)
+    assert report.run.status == "completed" and h.session.last_reply_heard is None
+
+
+def test_stopp_after_the_reply_was_generated_still_stops_its_playback(tmp_path) -> None:
+    h = make_harness(tmp_path)
+    h.synth.release.set()
+    report = h.answer("Hallo")
+    finish_run(report.run)
+    assert report.run.status == "completed"  # fully generated; the browser may still be playing it
+    assert h.session.stop_speech() is True and report.run.status == "cancelled"
+    assert h.session.last_reply_heard is False and h.session.stop_seq == 1
+    assert h.session.journal.passages[0].text == "Ich war im Zoo."  # the journal entry is kept

@@ -53,3 +53,19 @@ def load(context: Any, url: str) -> Any:
     page.add_init_script(PHASE_RECORDER)
     page.goto(url)
     return page
+
+
+class RecordingEcho(EchoTurnLLM):
+    """Echo LLM that remembers every prompt it was given."""
+
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    def respond(self, instructions: str, user_input: str, **kwargs: Any) -> Any:
+        self.inputs.append(user_input)
+        return super().respond(instructions, user_input, **kwargs)
+
+
+def demo_providers(llm: Any, wire: Any = SyntheticWire, seconds: int = 1) -> Providers:
+    tone = type("Tone", (SlowTone,), {"seconds": seconds})()
+    return Providers(llm, tone, wire)

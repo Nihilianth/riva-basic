@@ -60,6 +60,11 @@ button#riva-stop { background: #b91c1c !important; color: #ffffff !important;
 .info-text, .subdued { color: #374151 !important; }
 [role="tab"].selected, [role="tab"][aria-selected="true"] {
   color: #111827 !important; font-weight: 700; border-bottom: 5px solid #1d4ed8 !important; }
+/* Gradio's JSON viewer colors fail WCAG contrast; found by axe once the timeline has content. */
+.json-node .key { color: #7c2d12 !important; }
+.json-node .value.string { color: #14532d !important; }
+.json-node .value.number { color: #1e3a8a !important; }
+.json-node .value.boolean, .json-node .value.null { color: #581c87 !important; }
 button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible, summary:focus-visible {
   outline: 5px solid #1d4ed8 !important; outline-offset: 3px !important; }
 [role="tab"] { font-size: 1.35rem !important; padding: 0.8rem 1.2rem !important; }

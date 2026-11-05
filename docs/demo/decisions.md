@@ -132,3 +132,12 @@ audio start; perceived delay is therefore roughly 9-12 s.
 - **Finding (latency):** about 1.9 s of every ASR stage is waiting for the WebSocket close handshake: `LiveTurn`
   sets `done` only after `wire.close()` although the transcript is final. Another 1.0-1.7 s is spent connecting
   before audio is sent. Ticket created, not changed without the user's review.
+
+## Final validation decisions (2026-11-05)
+- Stopp acts on a reply that exists (synthesized or playing); it never stops recording or the microphone and does not
+  cancel a reply that is still being thought (documented limitation; tested).
+- The presenter stays local-only; enforced by the loopback bind plus a 403 guard; real access control is future work.
+- Session deletion is a documented procedure with a dry-run-first script for one closed session at a time.
+- The accessibility exception is exactly one Gradio upstream element (`.empty`); everything else must be clean.
+- The demo is NOT declared presentation-ready: real microphone, speakers, echo and a manual usability pass with
+  real hardware are the user's check (see the README checklist).

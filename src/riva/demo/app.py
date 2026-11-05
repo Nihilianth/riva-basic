@@ -1,6 +1,7 @@
 """Demo application: shared runtime (providers, ASR, replies, sessions) and the web server."""
 
 import argparse
+import ipaddress
 import os
 import re
 import threading
@@ -8,11 +9,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anyio
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     import gradio as gr
 
 
+HOST = "127.0.0.1"  # the demo listens on loopback only; there is no option to change it
 MIN_PAUSE_MS, MAX_PAUSE_MS = 500, 3000
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 KEEP_CLOSED = 50  # closed sessions stay as records so a late poll cannot resurrect one
@@ -182,6 +184,40 @@ def build_runtime(
     )  # fmt: skip
 
 
+class LocalOnlyPresenter:
+    """ASGI guard: /presenter (session content, resets, paid tests) answers loopback clients only.
+
+    Defense in depth. The server itself already binds to 127.0.0.1; if someone ever exposes it
+    (another bind address, a tunnel, a reverse proxy) the presenter page must still not be reachable
+    without real access control, which does not exist yet. Behind a proxy the client address is the
+    proxy's, so exposing the demo that way is not supported.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] in ("http", "websocket") and scope["path"].startswith("/presenter"):
+            client = scope.get("client")
+            host = client[0] if client else ""
+            if not is_loopback(host):
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    await PlainTextResponse("Nur lokal erreichbar.", status_code=403)(
+                        scope, receive, send
+                    )
+                return
+        await self.app(scope, receive, send)
+
+
+def is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def build_demo_api(runtime: DemoRuntime) -> FastAPI:
     from riva.demo import presenter
     from riva.demo.ui import CSS, HEAD, INDICATOR_JS, build_participant_app  # noqa: F401
@@ -215,11 +251,13 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
             except (ValueError, KeyError, TypeError):
                 return {"closed": False}
 
-    return build_voice_api(
+    api = build_voice_api(
         app, runtime.replies, css=CSS, head=HEAD, footer_links=[], extra_routes=lifecycle_routes,
         extra_apps=[("/presenter", presenter_app, {"css": presenter.CSS, "head": presenter.HEAD,
                                                   "footer_links": [], "show_error": False})],
     )  # fmt: skip
+    api.add_middleware(LocalOnlyPresenter)
+    return api
 
 
 def main() -> None:
@@ -250,7 +288,7 @@ def main() -> None:
     )
     mode = "FAKE providers, no paid calls" if args.fake else "OpenAI ASR, LLM and TTS (paid)"
     print(f"Demo 1: http://localhost:{args.port}  [{mode}]")
-    uvicorn.run(build_demo_api(runtime), host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run(build_demo_api(runtime), host=HOST, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

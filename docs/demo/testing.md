@@ -131,9 +131,26 @@ paid call); microphone and test-tone checks in the browser; the paid voice test 
 confirmation tick and counts exactly one call with it; saved defaults reach NEW sessions (persona, model,
 pause threshold via `/riva/settings`); applying settings to a running session changes the next LLM call but
 never the core rules; presenter reset closes the session at once and the participant page restarts; **Alles
-anhalten** stops audio already playing on the participant page; axe-core scan (Gradio's own empty-table
-placeholder `.empty` is excluded - an upstream issue we cannot change). Lifecycle tests with an injected
+anhalten** stops audio already playing on the participant page; axe-core scan (see below for the single
+exception). Lifecycle tests with an injected
 clock are in `tests/demo/test_lifecycle.py`.
+
+## Accessibility checks and the one exception
+
+Both pages are scanned with axe-core (WCAG 2 A/AA, serious/critical). The participant page has **no exception**.
+On the presenter page the test scans **without any exclusion** and tolerates exactly one finding: rule
+`aria-prohibited-attr` on Gradio's own empty-table placeholder `.empty` (an upstream Dataframe issue we cannot
+change); any other finding fails the test. Once the tables have content the same page scans completely clean.
+This stricter scan also found (and we fixed) the low-contrast colors of Gradio's JSON viewer used for the
+timeline. Automated checks do not replace a manual keyboard/screen-reader pass.
+
+## Stopp, local-only and deletion tests
+
+`tests/demo/test_session.py` (Stopp while thinking does not cancel the coming reply; Stopp after generation
+still stops playback), `tests/demo/browser/test_demo_conversation.py` (Stopp during playback vs during recording:
+the microphone stays on and the whole second utterance is processed), `tests/demo/test_presenter.py` (loopback-only
+presenter, 403 for others, no `--host` option, bind address `127.0.0.1`), `tests/demo/test_delete_archive.py`
+(dry run, delete, open sessions, malformed ids, ambiguity, symlinks).
 
 ## Embedded JavaScript
 
