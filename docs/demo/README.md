@@ -28,7 +28,15 @@ preview sentence and limits are in `src/riva/demo/defaults/*.toml` (copy them in
   before Start), German, large Start and Stopp buttons, one status indicator
   (😴 Drücke auf Start · 👂 hört zu · 🗣️ hört dich · ✍️ schreibt mit · 🤔 denkt nach · ⏳ bereitet vor ·
   🔊 spricht · ⚠️ Fehler), tabs "Mein Tagebuch" (journal, front) and "Das habe ich gehört" (verbatim ASR),
-  the last spoken reply, and a closed spoiler with read-only technical details. Presenter page: planned.
+  the last spoken reply, and a closed spoiler with read-only technical details.
+- **Presenter page** (`/presenter/`, German; same machine): (1) pre-flight checks in three groups - runs
+  automatically / needs you (microphone permission, test tone) / costs money (voice test, only after a
+  confirmation tick); (2) settings - persona, language model, voice, pause threshold - saved for NEW sessions or
+  applied to the selected running session; (3) sessions - live table, **Gewählte Sitzung beenden (Neustart)**
+  (closes at once, the participant page reloads into a new session), **Alle beenden**, **⏹ Alles anhalten**
+  (stops speech in every session, also the audio already buffered in the browser), journal, verbatim text,
+  timeline and silent alerts (possible distress) of the selected session. The participant page contains none
+  of this. The pause threshold (500-3000 ms, default 900) is read when a participant presses Start.
 - Journaling turn: ASR, hold/merge of fragments, structured LLM turn, journal (append, controlled
   revision), spoken reply, private session archive.
 

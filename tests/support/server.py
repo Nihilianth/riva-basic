@@ -66,12 +66,12 @@ class RunningDemo:
 
 
 @contextmanager
-def running_demo_app(root: Path, providers: Any) -> Iterator[RunningDemo]:
+def running_demo_app(root: Path, providers: Any, probe: Any = None) -> Iterator[RunningDemo]:
     """The real demo page (participant UI) on an ephemeral port with the given fake providers."""
     from riva.demo.app import build_demo_api, build_runtime
     from riva.demo.config import load_config
 
-    runtime = build_runtime(load_config(), providers, root / "archive")
+    runtime = build_runtime(load_config(), providers, root / "archive", probe=probe)
     api = build_demo_api(runtime)
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=port, log_level="warning"))

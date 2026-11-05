@@ -113,6 +113,17 @@ ganz gehört"; background noise never reaches the journal; the private archive o
 the verbatim ASR, the journal and the audio/transcript files, while the ordinary log (stdout) contains no
 transcript text. Shared helpers: `tests/support/{audio,fakes,server,ui,demo,scripted,conversations}.py`.
 
+## Presenter page tests (`tests/demo/browser/test_presenter_ui.py`, `test_presenter.py`, `test_preflight.py`)
+
+German presenter page with nothing of it on the participant page; automatic pre-flight table (fake probe, no
+paid call); microphone and test-tone checks in the browser; the paid voice test refuses without the
+confirmation tick and counts exactly one call with it; saved defaults reach NEW sessions (persona, model,
+pause threshold via `/riva/settings`); applying settings to a running session changes the next LLM call but
+never the core rules; presenter reset closes the session at once and the participant page restarts; **Alles
+anhalten** stops audio already playing on the participant page; axe-core scan (Gradio's own empty-table
+placeholder `.empty` is excluded - an upstream issue we cannot change). Lifecycle tests with an injected
+clock are in `tests/demo/test_lifecycle.py`.
+
 ## Embedded JavaScript
 
 The page scripts live in Python strings (`VAD_BROWSER_JS`, `PLAYBACK_JS`).

@@ -86,6 +86,7 @@ class DemoSession:
         self.last_run: ReplyRun | None = None
         self.verbatim: list[str] = []  # ASR text per saved segment, exactly as returned
         self.last_reply_text = ""
+        self.stop_seq = 0  # bumps on every Stopp so the participant page stops its player at once
         self.phase = "idle"  # what the status indicator shows; see riva.demo.texts.PHASES
         self._error_until = 0.0
         self._pending: list[tuple[str, str]] = []  # (segment id, ASR text) held for the next turn
@@ -147,6 +148,7 @@ class DemoSession:
                 "reply": self.last_reply_text,
                 "generation": self.last_run.generation_id if self.last_run else "",
                 "session_id": self.identity.session_id,
+                "stop_seq": str(self.stop_seq),
             }
 
     # --- ASR --------------------------------------------------------------------------------
@@ -348,9 +350,28 @@ class DemoSession:
 
     # --- speech control ---------------------------------------------------------------------
 
+    def update_settings(self, settings: SessionSettings) -> None:
+        """Presenter changed persona/model/voice for this running session (validated, audited)."""
+        self.config.check_choice(settings.persona_id, settings.model, settings.voice)
+        with self.lock:
+            if self.closed:
+                return
+            self.settings = settings
+        self.archive.event(
+            "settings_changed",
+            persona=settings.persona_id,
+            llm_model=settings.model,
+            voice=settings.voice,
+        )
+        self.archive.write_session(
+            settings={"persona": settings.persona_id, "llm_model": settings.model,
+                      "voice": settings.voice, "tts_model": self.config.tts_model}
+        )  # fmt: skip
+
     def stop_speech(self) -> bool:
         """The participant pressed Stopp: end the reply now and remember it was not fully heard."""
         with self.lock:
+            self.stop_seq += 1
             run = self.last_run
             if self.closed or run is None:
                 return False

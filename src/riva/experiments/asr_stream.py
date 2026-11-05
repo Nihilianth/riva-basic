@@ -783,12 +783,23 @@ async (enabled) => {
     window.rivaVad.submitNext = submitNext;
     const vadBase = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/";
     const ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
-    stage("requesting microphone / loading model");
+    // The presenter may set the pause threshold (demo app); other pages have no such route.
+    let redemptionMs = 900;
+    try {
+      const response = await fetch("/riva/settings", {cache: "no-store"});
+      if (response.ok) {
+        const settings = await response.json();
+        if (Number.isFinite(settings.redemption_ms)) {
+          redemptionMs = Math.min(3000, Math.max(300, settings.redemption_ms));
+        }
+      }
+    } catch (_) {}
+    stage("requesting microphone / loading model (pause " + redemptionMs + " ms)");
     window.rivaVad.instance = await window.vad.MicVAD.new({
       model: "v5",
       baseAssetPath: vadBase,
       onnxWASMBasePath: ortBase,
-      redemptionMs: 900,
+      redemptionMs: redemptionMs,
       preSpeechPadMs: 300,
       minSpeechMs: 250,
       onSpeechStart: () => {

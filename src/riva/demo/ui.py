@@ -94,6 +94,14 @@ SESSION_JS = """
   });
 }
 """
+# Stopp (or "Alles anhalten" from the presenter) bumps a counter; a change stops the player at once.
+STOP_SEQ_JS = """
+(seq) => {
+  if (window.rivaStopSeq !== undefined && window.rivaStopSeq !== seq && window.rivaStopSpeech)
+    window.rivaStopSpeech();
+  window.rivaStopSeq = seq;
+}
+"""
 STOP_JS = "(identity) => { if (window.rivaStopSpeech) window.rivaStopSpeech(); return [identity]; }"
 
 # Computes the visible phase from the server phase plus what only the browser knows.
@@ -147,6 +155,7 @@ def _values(session: DemoSession, timeline: list[dict[str, Any]]) -> tuple[Any, 
         view["phase"],
         view["generation"],
         view["session_id"],
+        view["stop_seq"],
     )
 
 
@@ -265,9 +274,10 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         phase_box = gr.Textbox(visible="hidden", elem_id="riva-phase")
         generation = gr.Textbox(visible="hidden", elem_id="riva-generation-id")
         session_box = gr.Textbox(visible="hidden", elem_id="riva-session-id")
+        stop_box = gr.Textbox(visible="hidden", elem_id="riva-stop-seq")
         ticker = gr.Timer(0.3)
 
-        outputs = [journal, heard, reply, timeline, phase_box, generation, session_box]
+        outputs = [journal, heard, reply, timeline, phase_box, generation, session_box, stop_box]
         start.click(None, inputs=[enabled], js=START_JS, queue=False, api_visibility="private")
         stop_button.click(
             stop, inputs=[identity], outputs=outputs, js=STOP_JS, queue=False,
@@ -300,6 +310,9 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             None, inputs=[phase_box], js="(p) => { window.rivaServerPhase = p; }", queue=False,
             api_visibility="private",
         )  # fmt: skip
+        stop_box.change(
+            None, inputs=[stop_box], js=STOP_SEQ_JS, queue=False, api_visibility="private"
+        )
         session_box.change(
             None, inputs=[session_box], js=SESSION_JS, queue=False, api_visibility="private"
         )

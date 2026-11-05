@@ -17,6 +17,8 @@ from riva.audio.replies import ReplyConfig, ReplyManager
 from riva.audio.transcription import AsrConfig
 from riva.demo.archive import SessionArchive
 from riva.demo.config import DemoConfig, load_config
+from riva.demo.fakes import FakeProbe
+from riva.demo.preflight import OpenAIProbe, ServiceProbe
 from riva.demo.providers import Providers, SpokenReplyProvider, fake_providers, real_providers
 from riva.demo.session import DemoSession, SessionSettings
 from riva.demo.turn import TurnProcessor
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
     import gradio as gr
 
 
+MIN_PAUSE_MS, MAX_PAUSE_MS = 500, 3000
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 KEEP_CLOSED = 50  # closed sessions stay as records so a late poll cannot resurrect one
 
@@ -56,6 +59,8 @@ class DemoRuntime:
     defaults: SessionSettings
     idle_timeout: float = 180.0
     monotonic: Callable[[], float] = time.monotonic
+    pause_ms: int = 900  # VAD pause threshold read by new participant pages (/riva/settings)
+    probe: ServiceProbe | None = None
     sessions: dict[str, DemoSession] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
     _last_reap: float = 0.0
@@ -80,6 +85,21 @@ class DemoRuntime:
                 self._prune_closed()
         session.touch()
         return session
+
+    def set_defaults(self, settings: SessionSettings) -> None:
+        """Choice for NEW sessions (validated against the allowlists)."""
+        self.config.check_choice(settings.persona_id, settings.model, settings.voice)
+        self.defaults = settings
+
+    def set_pause_ms(self, value: int) -> int:
+        if isinstance(value, bool) or not MIN_PAUSE_MS <= int(value) <= MAX_PAUSE_MS:
+            raise ValueError(f"pause must be {MIN_PAUSE_MS}-{MAX_PAUSE_MS} ms")
+        self.pause_ms = int(value)
+        return self.pause_ms
+
+    def stop_all(self) -> int:
+        """ "Alles anhalten": end speech in every active session. Returns how many were stopped."""
+        return sum(1 for session in self.active() if session.stop_speech())
 
     def get(self, session_id: str) -> DemoSession | None:
         with self.lock:
@@ -141,6 +161,7 @@ def build_runtime(
     *,
     idle_timeout: float = 180.0,
     monotonic: Callable[[], float] = time.monotonic,
+    probe: ServiceProbe | None = None,
 ) -> DemoRuntime:
     defaults = defaults or SessionSettings(
         config.default_persona, config.default_model, config.default_voice
@@ -150,16 +171,23 @@ def build_runtime(
     replies = ReplyManager(ReplyConfig(), lambda: SpokenReplyProvider(providers.speech))
     return DemoRuntime(
         config, providers, asr, replies, TurnProcessor(providers.llm, config), archive_root,
-        defaults, idle_timeout, monotonic,
+        defaults, idle_timeout, monotonic, probe=probe,
     )  # fmt: skip
 
 
 def build_demo_api(runtime: DemoRuntime) -> FastAPI:
+    from riva.demo import presenter
     from riva.demo.ui import CSS, HEAD, INDICATOR_JS, build_participant_app  # noqa: F401
 
     app: gr.Blocks = build_participant_app(runtime)
+    presenter_app = presenter.build_presenter_app(runtime)
 
     def lifecycle_routes(api: FastAPI) -> None:
+        @api.get("/riva/settings")
+        async def settings() -> dict[str, int]:
+            """Pause threshold set by the presenter; read by the VAD when Start is pressed."""
+            return {"redemption_ms": runtime.pause_ms}
+
         @api.post("/riva/session_end")
         async def session_end(request: Request) -> dict[str, bool]:
             """Unload beacon from the page: close that page's session now (best effort)."""
@@ -170,8 +198,10 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
                 return {"closed": False}
 
     return build_voice_api(
-        app, runtime.replies, css=CSS, head=HEAD, footer_links=[], extra_routes=lifecycle_routes
-    )
+        app, runtime.replies, css=CSS, head=HEAD, footer_links=[], extra_routes=lifecycle_routes,
+        extra_apps=[("/presenter", presenter_app, {"css": presenter.CSS, "head": presenter.HEAD,
+                                                  "footer_links": [], "show_error": False})],
+    )  # fmt: skip
 
 
 def main() -> None:
@@ -194,7 +224,12 @@ def main() -> None:
     config = load_config(args.config_dir)
     root = prepare_environment(args.private_dir)
     providers = fake_providers() if args.fake else real_providers()
-    runtime = build_runtime(config, providers, root / "research-data" / "demo-1")
+    runtime = build_runtime(
+        config,
+        providers,
+        root / "research-data" / "demo-1",
+        probe=FakeProbe() if args.fake else OpenAIProbe(),
+    )
     mode = "FAKE providers, no paid calls" if args.fake else "OpenAI ASR, LLM and TTS (paid)"
     print(f"Demo 1: http://localhost:{args.port}  [{mode}]")
     uvicorn.run(build_demo_api(runtime), host="127.0.0.1", port=args.port, log_level="warning")

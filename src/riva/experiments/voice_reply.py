@@ -516,6 +516,7 @@ def build_voice_api(
     extra_js: str = "",
     footer_links: list[str] | None = None,
     extra_routes: Callable[[FastAPI], None] | None = None,
+    extra_apps: list[tuple[str, gr.Blocks, dict[str, Any]]] | None = None,
 ) -> FastAPI:
     """The FastAPI app: the Gradio page plus the playback, reply-audio and diagnostics routes."""
     from gradio.routes import mount_gradio_app
@@ -593,6 +594,8 @@ def build_voice_api(
                 )
         return {"recorded": recorded}
 
+    for path, extra_app, options in extra_apps or []:  # before "/", which would catch them
+        mount_gradio_app(api, extra_app, path=path, **options)
     mounted: FastAPI = mount_gradio_app(
         api,
         demo,
