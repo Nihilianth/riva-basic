@@ -102,3 +102,15 @@ A closed session stays in `runtime.sessions` as a record (the newest 50 are kept
 through the commit gate (`stale_discarded` in ITS timeline), is never recreated for the same identity, and
 its archive keeps `session_closed` with the reason. Close is idempotent. Tests: `tests/demo/test_lifecycle.py`
 (injected clock) and the reload/reset Playwright tests.
+
+## Pre-flight checks (`riva.demo.preflight`)
+Three kinds, shown in three groups on the presenter page:
+- **automatic** (free, silent): archive writable and outside Git; `OPENAI_API_KEY` present (never shown); each
+  allowed LLM model and the TTS model exist (`models.retrieve`, no cost); an ASR session can be opened (no audio
+  sent); configured voices valid. Unreachable service and unavailable model are reported differently; provider
+  error text is never shown.
+- **interactive** (browser/person): microphone permission (`getUserMedia`), audio playback (test tone that the
+  presenter confirms hearing).
+- **paid** (one real TTS request, a few cents): only after an explicit confirmation (`paid_voice_test` refuses
+  otherwise); it is the only way to know that a voice really speaks.
+Probes sit behind `ServiceProbe` (`OpenAIProbe` real, `FakeProbe` offline); the real probe is not run in tests.

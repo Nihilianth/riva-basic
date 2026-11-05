@@ -58,3 +58,42 @@ class EchoTurnLLM:
             journal_op={"type": "append", "text": transcript, "target_id": None, "evidence": None}
         )
         return LLMReply(text, len(user_input) // 4, len(text) // 4)
+
+
+class FakeProbe:
+    """Offline service probe for tests and ``--fake``: configurable answers, counts paid calls."""
+
+    def __init__(
+        self,
+        *,
+        key: bool = True,
+        models: set[str] | None = None,
+        asr: bool | Exception = True,
+        down: bool = False,
+    ) -> None:
+        self.key, self.asr, self.down = key, asr, down
+        self.models = models
+        self.paid_calls = 0
+        self.model_lookups: list[str] = []
+
+    def api_key_present(self) -> bool:
+        return self.key
+
+    def model_available(self, model: str) -> bool:
+        from riva.demo.preflight import ProbeError
+
+        self.model_lookups.append(model)
+        if self.down:
+            raise ProbeError
+        return self.models is None or model in self.models
+
+    def asr_reachable(self) -> bool:
+        from riva.demo.preflight import ProbeError
+
+        if isinstance(self.asr, Exception) or self.down:
+            raise ProbeError
+        return self.asr
+
+    def synthesize(self, voice: str, tts_model: str, text: str) -> int:
+        self.paid_calls += 1
+        return 48_000
