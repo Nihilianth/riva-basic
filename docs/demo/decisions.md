@@ -55,3 +55,19 @@ Dates are 2026-11-05 unless noted. Newest changes go at the end of each section.
   Preview sentence (same for every voice): "Hallo! So klinge ich. Wollen wir zusammen dein Tagebuch schreiben?"
 - Latency and cost of the real LLM call are not measured yet; that needs the approved-by-request live smoke
   test (`riva-skm.14`).
+
+## Phase 0 live LLM smoke (2026-11-05, approved, bounded)
+7 calls (5 cases on gpt-4.1-mini, 2 on gpt-4.1), synthetic German only, estimated cost about $0.01 (cap was
+EUR 1; the test is bounded by construction: max 14 calls, 700 output tokens each, abort at $0.25 estimated).
+Results are in the private archive (`research-data/demo-1/live-eval/`), not in Git.
+- Schema compliance: 7/7 valid on the first attempt with strict structured output.
+- LLM-only latency: gpt-4.1-mini 1.6-4.0 s, gpt-4.1 about 1.1-1.2 s; ~1,260 input tokens (mostly the core
+  prompt) and 80-160 output tokens per turn, roughly $0.0015 per turn on mini. End-to-end latency is not measured.
+- Meaning: good for the Zoo follow-up, explicit correction (revise), stutter removal and the ASR homophone
+  ("Möwe mit Mähne": kept as spoken, marked uncertain, asked "meinst du ... eine andere Vogelart?" - no silent guess).
+- **Failure found**: for the ambiguous correction ("Nein, es waren vier.") gpt-4.1-mini revised an earlier
+  entry and invented "vier Elefanten und Löwen"; gpt-4.1 correctly returned `none` and asked. The validator
+  flagged `uncertain` + `low_grounding` but did not stop it. Decision: **a `revise` is applied only when the
+  turn is not uncertain and has no `low_grounding` flag**; otherwise the journal stays unchanged and the reply
+  becomes a clarification (the model's reply if it already contains a question, else a fixed German one).
+  Implemented with the journal (riva-skm.6) and covered by tests; the prompt also gets a worked example.

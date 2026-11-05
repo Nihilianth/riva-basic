@@ -21,7 +21,7 @@ Last verified on this machine (Chromium, assets and node installed): all collect
 |---|---|---|---|
 | Unit / component / mocked pipeline | `tests/` (existing flat files), `tests/demo/` | nothing | none |
 | Browser (Playwright, headless Chromium) | `tests/demo/browser/` | `e2e` group + Chromium | `browser` |
-| Live (real ASR/LLM/TTS) | `tests/demo/live/` (planned) | `RIVA_RUN_LIVE_TESTS=1`, API key, explicit approval | `live` |
+| Live (real ASR/LLM/TTS) | `tests/demo/live/` | `RIVA_RUN_LIVE_TESTS=1`, API key, explicit approval | `live` |
 
 Rules enforced by `tests/conftest.py`:
 - An autouse **network guard** makes any non-loopback connection or DNS lookup fail in every test that is
@@ -58,6 +58,15 @@ Scenarios: Zoo example from the brief, incomplete sentences, self-correction (re
 stuttering, ambiguous reference, ASR homophone error, silence hallucination, distress mention, vocabulary
 offer. `tests/support/conversations.py` loads and validates them (`tests/demo/test_conversation_fixtures.py`).
 The older `tests/fixtures/conversations/` files belong to the experiment apps.
+
+## Live LLM smoke test (paid, opt-in)
+
+`tests/demo/live/test_llm_smoke.py`: 7 calls on synthetic German cases (self-correction, ambiguous
+correction, ASR homophone, stutter, follow-up). Run only with approval:
+`RIVA_RUN_LIVE_TESTS=1 uv run --env-file .env pytest -m live tests/demo/live -s`. Bounded by construction
+(max 14 calls, 700 output tokens each, abort at about $0.25 estimated; prices in the file are approximate).
+It asserts schema compliance; meaning is judged from the saved results under
+`../private/research-data/demo-1/live-eval/`. Without `RIVA_RUN_LIVE_TESTS=1` it is skipped.
 
 ## Fake microphone (real VAD against prerecorded speech)
 
