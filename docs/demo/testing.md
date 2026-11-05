@@ -2,6 +2,19 @@
 
 Source of truth for behavior is the code and these tests; this page explains how to run them.
 
+## Reading test results
+
+`passed`, `failed`, `skipped` and `deselected` mean different things:
+- **skipped** = a test was collected but a prerequisite is missing; `uv run pytest -rs` prints the reason
+  (no Playwright/Chromium, no cached VAD assets -> `scripts/fetch_browser_test_assets.py`, no `node`,
+  `live` tests without `RIVA_RUN_LIVE_TESTS=1`).
+- **deselected** = excluded on purpose with `-m` (for example `-m "not browser"` deselects the browser tests).
+- **failed** is always a real problem. Expect 0 passed-with-skips to be explained by the list above.
+
+Last verified on this machine (Chromium, assets and node installed): all collected tests passed, 0 skipped,
+0 failed; `-m browser` selects the 5 browser tests and deselects the rest; with the VAD asset cache missing
+4 browser tests skip with the hint above.
+
 ## Layers
 
 | Layer | Where | Needs | Marker |

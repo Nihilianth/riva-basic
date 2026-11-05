@@ -7,8 +7,11 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
+      # The user's verbatim demo brief must stay byte-for-byte as written.
       - id: end-of-file-fixer
+        exclude: ^docs/demo/demo_1_notes\.md$
       - id: trailing-whitespace
+        exclude: ^docs/demo/demo_1_notes\.md$
   - repo: local
     hooks:
       - id: ruff-check
