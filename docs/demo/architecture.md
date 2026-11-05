@@ -89,3 +89,16 @@ iterate the `ReplyRun` so its bounded audio queue drains while the page plays th
 `/riva/reply_audio/<id>`. The poll (300 ms) publishes `DemoSession.view()` (phase, journal, verbatim, reply,
 generation id) and the server phase; the page combines it with what only the browser knows (user speaking,
 audio playing) to show one indicator (`INDICATOR_JS`). Start is a real click, which also unlocks audio.
+
+## Session lifecycle: creating is not closing (riva.demo.app.DemoRuntime)
+| Event | What happens |
+|---|---|
+| Page load / reload | A new Gradio page state has a **new identity**; `ensure(identity)` **creates** a new isolated session (own journal, archive folder, ASR turn). Nothing is shared with the old page. |
+| Page unload (reload, tab closed) | `pagehide` sends `navigator.sendBeacon('/riva/session_end')` with the page's session id (published by the poll); the old session is **closed immediately** (reason `page_unloaded`). Best effort. |
+| Presenter reset | `runtime.reset(id)` / `reset_all()` **closes immediately** (reason `presenter_reset`); the participant page sees phase `closed`, reloads itself and gets a new session. |
+| Abandoned page (crash, sleep, network loss) | The page polls every 300 ms; `reap()` closes sessions idle for more than `idle_timeout` (180 s, reason `expired`). It runs periodically whenever any page is active. |
+| Gradio state cleanup | `release(identity)` closes (reason `released`) as the final backstop. |
+A closed session stays in `runtime.sessions` as a record (the newest 50 are kept). It rejects every late result
+through the commit gate (`stale_discarded` in ITS timeline), is never recreated for the same identity, and
+its archive keeps `session_closed` with the reason. Close is idempotent. Tests: `tests/demo/test_lifecycle.py`
+(injected clock) and the reload/reset Playwright tests.

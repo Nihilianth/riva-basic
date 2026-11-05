@@ -2,12 +2,15 @@
 
 import argparse
 import os
+import re
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
@@ -25,9 +28,24 @@ if TYPE_CHECKING:
     import gradio as gr
 
 
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+KEEP_CLOSED = 50  # closed sessions stay as records so a late poll cannot resurrect one
+
+
 @dataclass
 class DemoRuntime:
-    """Everything shared by all sessions of one running demo."""
+    """Everything shared by all sessions of one running demo.
+
+    Session lifecycle - creating and closing are different, explicit things:
+    - ``ensure(identity)`` CREATES a session the first time a page identity is seen. A page reload
+      is a new identity, therefore a new, isolated session (own journal, archive folder, ASR turn).
+    - ``reset(id)`` is the presenter's explicit reset: the session is closed immediately.
+    - ``end_session(id)`` is the page's unload beacon: best-effort immediate close of the old page.
+    - ``reap()`` expires abandoned sessions (no poll for ``idle_timeout`` seconds); ``release``
+      is Gradio's own state cleanup. All of them end in the idempotent ``DemoSession.close``.
+    A closed session stays in ``sessions`` as a record, rejects every late result (commit gate)
+    and is never recreated for the same identity.
+    """
 
     config: DemoConfig
     providers: Providers
@@ -36,11 +54,15 @@ class DemoRuntime:
     processor: TurnProcessor
     archive_root: Path
     defaults: SessionSettings
+    idle_timeout: float = 180.0
+    monotonic: Callable[[], float] = time.monotonic
     sessions: dict[str, DemoSession] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
+    _last_reap: float = 0.0
 
     def ensure(self, identity: SessionIdentity) -> DemoSession:
-        """The session for this page load, created on first use (a reload has a new identity)."""
+        """The session for this page identity: created on first use, never recreated once closed."""
+        self.reap_if_due()
         with self.lock:
             session = self.sessions.get(identity.session_id)
             if session is None:
@@ -52,18 +74,63 @@ class DemoRuntime:
                     asr=self.asr,
                     replies=self.replies,
                     archive=SessionArchive(self.archive_root, identity),
+                    monotonic=self.monotonic,
                 )
                 self.sessions[identity.session_id] = session
-            return session
+                self._prune_closed()
+        session.touch()
+        return session
+
+    def get(self, session_id: str) -> DemoSession | None:
+        with self.lock:
+            return self.sessions.get(session_id)
+
+    def active(self) -> list[DemoSession]:
+        with self.lock:
+            return [s for s in self.sessions.values() if not s.closed]
+
+    def reset(self, session_id: str, reason: str = "presenter_reset") -> bool:
+        """Close one session immediately. Returns False if it is unknown or already closed."""
+        session = self.get(session_id) if SESSION_ID.fullmatch(session_id) else None
+        if session is None or session.closed:
+            return False
+        session.close(reason)
+        return True
+
+    def reset_all(self, reason: str = "presenter_reset") -> int:
+        return sum(self.reset(s.identity.session_id, reason) for s in self.active())
+
+    def end_session(self, session_id: str) -> bool:
+        """The page is going away (reload/close): close its session now."""
+        return self.reset(session_id, "page_unloaded")
+
+    def reap(self) -> list[str]:
+        """Expire sessions whose page stopped polling; their records stay consistent."""
+        expired = [s for s in self.active() if s.idle_seconds() > self.idle_timeout]
+        for session in expired:
+            session.close("expired")
+        return [s.identity.session_id for s in expired]
+
+    def reap_if_due(self) -> None:
+        now = self.monotonic()
+        with self.lock:
+            if now - self._last_reap < 5.0:
+                return
+            self._last_reap = now
+        self.reap()
 
     def release(self, identity: SessionIdentity) -> None:
-        """Called when Gradio discards the page state; also the presenter's reset path."""
-        with self.lock:
-            session = self.sessions.pop(identity.session_id, None)
+        """Gradio discarded the page state (long after the page left): close, keep the record."""
+        session = self.get(identity.session_id)
         if session is not None:
             session.close("released")
         else:
             self.asr.release(identity)
+
+    def _prune_closed(self) -> None:
+        closed = [sid for sid, s in self.sessions.items() if s.closed]
+        for sid in closed[:-KEEP_CLOSED] if len(closed) > KEEP_CLOSED else []:
+            del self.sessions[sid]
 
 
 def build_runtime(
@@ -71,6 +138,9 @@ def build_runtime(
     providers: Providers,
     archive_root: Path,
     defaults: SessionSettings | None = None,
+    *,
+    idle_timeout: float = 180.0,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> DemoRuntime:
     defaults = defaults or SessionSettings(
         config.default_persona, config.default_model, config.default_voice
@@ -80,7 +150,7 @@ def build_runtime(
     replies = ReplyManager(ReplyConfig(), lambda: SpokenReplyProvider(providers.speech))
     return DemoRuntime(
         config, providers, asr, replies, TurnProcessor(providers.llm, config), archive_root,
-        defaults,
+        defaults, idle_timeout, monotonic,
     )  # fmt: skip
 
 
@@ -88,7 +158,20 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
     from riva.demo.ui import CSS, HEAD, INDICATOR_JS, build_participant_app  # noqa: F401
 
     app: gr.Blocks = build_participant_app(runtime)
-    return build_voice_api(app, runtime.replies, css=CSS, head=HEAD, footer_links=[])
+
+    def lifecycle_routes(api: FastAPI) -> None:
+        @api.post("/riva/session_end")
+        async def session_end(request: Request) -> dict[str, bool]:
+            """Unload beacon from the page: close that page's session now (best effort)."""
+            try:
+                data = await request.json()
+                return {"closed": runtime.end_session(str(data["session_id"]))}
+            except (ValueError, KeyError, TypeError):
+                return {"closed": False}
+
+    return build_voice_api(
+        app, runtime.replies, css=CSS, head=HEAD, footer_links=[], extra_routes=lifecycle_routes
+    )
 
 
 def main() -> None:

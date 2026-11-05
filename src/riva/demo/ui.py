@@ -80,6 +80,20 @@ START_JS = (
     + VAD_BROWSER_JS.strip()
     + ")(enabled); }"
 )
+# Remember this page's session id and tell the server when the page goes away (reload/close), so
+# the old session is closed at once instead of lingering until it expires.
+SESSION_JS = """
+(id) => {
+  if (!id) return;
+  window.rivaSessionId = id;
+  if (window.rivaUnloadBeacon) return;
+  window.rivaUnloadBeacon = true;
+  window.addEventListener('pagehide', () => {
+    navigator.sendBeacon('/riva/session_end',
+      new Blob([JSON.stringify({session_id: window.rivaSessionId})], {type: 'application/json'}));
+  });
+}
+"""
 STOP_JS = "(identity) => { if (window.rivaStopSpeech) window.rivaStopSpeech(); return [identity]; }"
 
 # Computes the visible phase from the server phase plus what only the browser knows.
@@ -132,6 +146,7 @@ def _values(session: DemoSession, timeline: list[dict[str, Any]]) -> tuple[Any, 
         timeline,
         view["phase"],
         view["generation"],
+        view["session_id"],
     )
 
 
@@ -249,9 +264,10 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         speech = gr.Button("-", visible="hidden", elem_id="riva-vad-speech")
         phase_box = gr.Textbox(visible="hidden", elem_id="riva-phase")
         generation = gr.Textbox(visible="hidden", elem_id="riva-generation-id")
+        session_box = gr.Textbox(visible="hidden", elem_id="riva-session-id")
         ticker = gr.Timer(0.3)
 
-        outputs = [journal, heard, reply, timeline, phase_box, generation]
+        outputs = [journal, heard, reply, timeline, phase_box, generation, session_box]
         start.click(None, inputs=[enabled], js=START_JS, queue=False, api_visibility="private")
         stop_button.click(
             stop, inputs=[identity], outputs=outputs, js=STOP_JS, queue=False,
@@ -284,5 +300,8 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             None, inputs=[phase_box], js="(p) => { window.rivaServerPhase = p; }", queue=False,
             api_visibility="private",
         )  # fmt: skip
+        session_box.change(
+            None, inputs=[session_box], js=SESSION_JS, queue=False, api_visibility="private"
+        )
         app.load(None, js=f"() => {{ {INDICATOR_JS} }}", queue=False, api_visibility="private")
     return app

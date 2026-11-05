@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -515,6 +515,7 @@ def build_voice_api(
     head: str | None = None,
     extra_js: str = "",
     footer_links: list[str] | None = None,
+    extra_routes: Callable[[FastAPI], None] | None = None,
 ) -> FastAPI:
     """The FastAPI app: the Gradio page plus the playback, reply-audio and diagnostics routes."""
     from gradio.routes import mount_gradio_app
@@ -540,6 +541,8 @@ def build_voice_api(
         return {"recorded": True}
 
     add_reply_audio_route(api, replies)
+    if extra_routes is not None:
+        extra_routes(api)  # must be registered before Gradio is mounted at "/"
 
     @api.post("/riva/playback")
     async def record_browser_playback(request: Request) -> dict[str, bool]:

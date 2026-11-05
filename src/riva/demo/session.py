@@ -73,6 +73,9 @@ class DemoSession:
         self.identity, self.config, self.settings = identity, config, settings
         self.processor, self.asr, self.replies, self.archive = processor, asr, replies, archive
         self.monotonic = monotonic
+        self.created_at = monotonic()
+        self.last_seen = self.created_at
+        self.close_reason = ""
         self.lock = threading.RLock()
         self.epoch = 0
         self.closed = False
@@ -93,6 +96,17 @@ class DemoSession:
                       "voice": settings.voice, "tts_model": config.tts_model},
         )  # fmt: skip
         archive.event("session_started")
+
+    # --- lifecycle ----------------------------------------------------------------------------
+
+    def touch(self) -> None:
+        """The page is alive (it polls every 300 ms); abandoned sessions stop being touched."""
+        with self.lock:
+            self.last_seen = self.monotonic()
+
+    def idle_seconds(self) -> float:
+        with self.lock:
+            return self.monotonic() - self.last_seen
 
     # --- gate -------------------------------------------------------------------------------
 
@@ -132,6 +146,7 @@ class DemoSession:
                 "heard": "\n\n".join(self.verbatim),
                 "reply": self.last_reply_text,
                 "generation": self.last_run.generation_id if self.last_run else "",
+                "session_id": self.identity.session_id,
             }
 
     # --- ASR --------------------------------------------------------------------------------
@@ -376,6 +391,7 @@ class DemoSession:
             if self.closed:
                 return
             self.closed = True  # the gate closes first, then work is cancelled
+            self.close_reason = reason
             self.epoch += 1
             self._pending.clear()
         self.replies.release(self.identity)

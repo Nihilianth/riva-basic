@@ -123,7 +123,7 @@ def test_a_reset_by_the_presenter_ends_the_session_and_the_page_starts_a_new_one
         while not app.runtime.sessions and time.monotonic() < deadline:
             time.sleep(0.05)
         (first,) = app.runtime.sessions.values()
-        first.close("presenter")
+        assert app.runtime.reset(first.identity.session_id) is True  # explicit presenter reset
         page.wait_for_function(
             "document.getElementById('riva-status')?.dataset.phase === 'closed'", timeout=10_000
         )
@@ -256,3 +256,28 @@ def test_the_introduction_is_visible_first_and_nothing_starts_by_itself(
         page.get_by_role("button", name="▶ Start").click()
         page.wait_for_function(LISTENING, timeout=90_000)
         assert intro.is_visible()  # stays available as a reminder
+
+
+def test_a_reload_opens_an_isolated_session_and_closes_the_old_one(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.wait_for_function("window.rivaSessionId", timeout=20_000)
+        (first,) = app.runtime.active()
+        assert page.evaluate("window.rivaSessionId") == first.identity.session_id
+        page.reload()
+        page.wait_for_function("window.rivaSessionId", timeout=20_000)
+        # The unload beacon closed the old session; the reloaded page owns a new, empty one.
+        deadline = time.monotonic() + 15
+        while not first.closed and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert first.closed and first.close_reason == "page_unloaded"
+        (fresh,) = app.runtime.active()
+        assert fresh.identity.session_id != first.identity.session_id
+        assert fresh.archive.directory != first.archive.directory
+        assert fresh.journal.passages == [] and fresh.verbatim == []
+        assert page.evaluate("window.rivaSessionId") == fresh.identity.session_id
