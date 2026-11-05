@@ -114,3 +114,10 @@ Three kinds, shown in three groups on the presenter page:
 - **paid** (one real TTS request, a few cents): only after an explicit confirmation (`paid_voice_test` refuses
   otherwise); it is the only way to know that a voice really speaks.
 Probes sit behind `ServiceProbe` (`OpenAIProbe` real, `FakeProbe` offline); the real probe is not run in tests.
+
+## Voice previews (`riva.demo.voices`)
+`VoicePreviews` writes `<voice>-<hash(model|voice|sentence)>.wav` once (atomic, private folder) and serves it
+from disk afterwards; one lock per voice means concurrent requests cost one synthesis. `GET
+/riva/voice_preview/<voice>` serves it (404 for voices outside the allowlist, 502 without provider detail).
+The participant dropdown calls `rivaPlayPreview` on a user choice and updates the session's voice; the
+presenter can prepare all previews after a cost confirmation, and the pre-flight shows how many are cached.

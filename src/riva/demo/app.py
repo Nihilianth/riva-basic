@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+import anyio
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from riva.audio.recordings import RecordingStore, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager
@@ -22,6 +24,7 @@ from riva.demo.preflight import OpenAIProbe, ServiceProbe
 from riva.demo.providers import Providers, SpokenReplyProvider, fake_providers, real_providers
 from riva.demo.session import DemoSession, SessionSettings
 from riva.demo.turn import TurnProcessor
+from riva.demo.voices import VoiceError, VoicePreviews
 from riva.experiments.asr_stream import AsrSessions
 from riva.experiments.audio_capture import prepare_environment
 from riva.experiments.voice_reply import build_voice_api
@@ -61,6 +64,7 @@ class DemoRuntime:
     monotonic: Callable[[], float] = time.monotonic
     pause_ms: int = 900  # VAD pause threshold read by new participant pages (/riva/settings)
     probe: ServiceProbe | None = None
+    voices: VoicePreviews | None = None
     sessions: dict[str, DemoSession] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
     _last_reap: float = 0.0
@@ -172,6 +176,9 @@ def build_runtime(
     return DemoRuntime(
         config, providers, asr, replies, TurnProcessor(providers.llm, config), archive_root,
         defaults, idle_timeout, monotonic, probe=probe,
+        voices=VoicePreviews(
+            archive_root.parent / "demo-1-cache" / "voice-previews", providers.speech, config
+        ),
     )  # fmt: skip
 
 
@@ -187,6 +194,17 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
         async def settings() -> dict[str, int]:
             """Pause threshold set by the presenter; read by the VAD when Start is pressed."""
             return {"redemption_ms": runtime.pause_ms}
+
+        @api.get("/riva/voice_preview/{voice}")
+        async def voice_preview(voice: str) -> FileResponse:
+            """The cached preview sentence in one voice (generated on first use)."""
+            if runtime.voices is None or voice not in runtime.config.voices:
+                raise HTTPException(status_code=404)
+            try:
+                path = await anyio.to_thread.run_sync(runtime.voices.get, voice)
+            except VoiceError:
+                raise HTTPException(status_code=502) from None
+            return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
         @api.post("/riva/session_end")
         async def session_end(request: Request) -> dict[str, bool]:

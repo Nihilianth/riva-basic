@@ -146,6 +146,15 @@ def run_automatic(config: DemoConfig, probe: ServiceProbe, archive_root: Path) -
     return checks
 
 
+def voice_cache_check(cached: int, total: int) -> Check:
+    """Are the voice previews already on disk? Missing ones are generated (paid) on first use."""
+    label = "Stimmen-Vorschauen gespeichert"
+    if cached >= total:
+        return Check("voice_cache", label, "automatic", "ok", f"Alle {total} Vorschauen sind da.")
+    hint = "Fehlende werden beim ersten Anhören erzeugt (wenige Cent); besser vorher vorbereiten."
+    return Check("voice_cache", label, "automatic", "warn", f"{cached} von {total}. {hint}")
+
+
 def interactive_checks() -> list[Check]:
     """Checks only a person at the browser can do; the presenter page runs them on button clicks."""
     return [

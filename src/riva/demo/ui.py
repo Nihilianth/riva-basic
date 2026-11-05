@@ -6,6 +6,7 @@ controls (``visible="hidden"``) stay in the DOM so the page scripts can click th
 """
 
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from riva.audio.recordings import SessionIdentity, new_development_session
@@ -50,6 +51,7 @@ button#riva-start { background: #166534 !important; color: #ffffff !important;
 button#riva-stop { background: #b91c1c !important; color: #ffffff !important;
   border: 3px solid #7f1d1d !important; }
 [role="tab"] { color: #111827 !important; }
+.info-text, .subdued { color: #374151 !important; }
 [role="tab"].selected, [role="tab"][aria-selected="true"] {
   color: #111827 !important; font-weight: 700; border-bottom: 5px solid #1d4ed8 !important; }
 button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible, summary:focus-visible {
@@ -101,6 +103,20 @@ STOP_SEQ_JS = """
     window.rivaStopSpeech();
   window.rivaStopSeq = seq;
 }
+"""
+# Plays the cached preview sentence of a voice (a click on the dropdown is a user gesture).
+PREVIEW_JS = """
+(() => {
+  window.rivaPreviewPlays = 0;
+  window.rivaPlayPreview = (voice) => {
+    if (window.rivaStopSpeech) window.rivaStopSpeech();
+    if (window.rivaPreviewAudio) { try { window.rivaPreviewAudio.pause(); } catch (_) {} }
+    const audio = new Audio('/riva/voice_preview/' + encodeURIComponent(voice));
+    window.rivaPreviewAudio = audio;
+    window.rivaPreviewPlays += 1;
+    audio.play().catch(() => {});
+  };
+})();
 """
 STOP_JS = "(identity) => { if (window.rivaStopSpeech) window.rivaStopSpeech(); return [identity]; }"
 
@@ -230,6 +246,11 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             if session.phase == "error":
                 session.set_phase("listening")
 
+    def set_voice(voice: str, identity: SessionIdentity) -> None:
+        session = runtime.ensure(identity)
+        if voice in runtime.config.voices and not session.closed:
+            session.update_settings(replace(session.settings, voice=voice))
+
     def stop(identity: SessionIdentity) -> tuple[Any, ...]:
         session = runtime.ensure(identity)
         session.stop_speech()
@@ -246,6 +267,11 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         with gr.Row():
             start = gr.Button(texts.START, variant="primary", size="lg", elem_id="riva-start")
             stop_button = gr.Button(texts.STOP, variant="stop", size="lg", elem_id="riva-stop")
+        voice_choices = [(name.capitalize(), name) for name in runtime.config.voices]
+        voice = gr.Dropdown(
+            voice_choices, value=runtime.defaults.voice, label=texts.VOICE_LABEL,
+            info=texts.VOICE_INFO, elem_id="riva-voice", filterable=False,
+        )  # fmt: skip
         reply = gr.Textbox(
             label=texts.REPLY_LABEL, interactive=False, lines=3, elem_id="riva-reply",
             show_label=True,
@@ -310,11 +336,20 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             None, inputs=[phase_box], js="(p) => { window.rivaServerPhase = p; }", queue=False,
             api_visibility="private",
         )  # fmt: skip
+        voice.input(
+            set_voice, inputs=[voice, identity], outputs=[],
+            js=(
+                "(voice, identity) => { if (window.rivaPlayPreview) window.rivaPlayPreview(voice);"
+                " return [voice, identity]; }"
+            ),
+            queue=False, show_progress="hidden", api_visibility="private",
+        )  # fmt: skip
         stop_box.change(
             None, inputs=[stop_box], js=STOP_SEQ_JS, queue=False, api_visibility="private"
         )
         session_box.change(
             None, inputs=[session_box], js=SESSION_JS, queue=False, api_visibility="private"
         )
+        app.load(None, js=f"() => {{ {PREVIEW_JS} }}", queue=False, api_visibility="private")
         app.load(None, js=f"() => {{ {INDICATOR_JS} }}", queue=False, api_visibility="private")
     return app

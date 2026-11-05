@@ -10,6 +10,8 @@ INTRO_STEPS = (
     "Mit Stopp bin ich still.",
 )
 INTRO_NOTE = "Ich bin ein Computer-Programm, kein Mensch."
+VOICE_LABEL = "Stimme"
+VOICE_INFO = "Wähle eine Stimme. Du hörst einen kurzen Satz."
 START = "▶ Start"
 STOP = "⏹ Stopp"
 TAB_JOURNAL = "Mein Tagebuch"

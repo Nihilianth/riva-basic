@@ -8,9 +8,10 @@ from conftest import mic_browser  # type: ignore[import-not-found]
 from support.audio import clip, compose, silence
 from support.fakes import FailingWire, delayed_wire
 from support.server import running_demo_app
-from support.ui import LISTENING, is_subsequence, load, providers
+from support.ui import LISTENING, SlowEcho, SlowTone, is_subsequence, load, providers
 
 from riva.demo.text import ENGLISH_ONLY, words
+from riva.experiments.vad_self_test import SyntheticWire
 
 
 def test_page_is_german_with_only_simple_visible_controls(
@@ -281,3 +282,44 @@ def test_a_reload_opens_an_isolated_session_and_closes_the_old_one(
         assert fresh.archive.directory != first.archive.directory
         assert fresh.journal.passages == [] and fresh.verbatim == []
         assert page.evaluate("window.rivaSessionId") == fresh.identity.session_id
+
+
+def test_choosing_a_voice_plays_a_cached_preview_and_is_used_for_the_next_reply(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    from riva.demo.providers import Providers
+
+    voices_used: list[str] = []
+
+    class SpySpeech(SlowTone):
+        def speech(self, phrase: str, config: Any) -> Any:
+            voices_used.append(config.voice)
+            return super().speech(phrase, config)
+
+    spy = Providers(SlowEcho(), SpySpeech(), SyntheticWire)
+    wav = compose(tmp_path / "mic.wav", silence(1.0), clip("zoo"), silence(12.0))
+    with running_demo_app(tmp_path, spy) as app, mic_browser(playwright_instance, wav) as context:
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        assert page.get_by_label("Stimme").is_visible()
+        previews_before = len(voices_used)
+        for _ in range(2):  # the second time must come from the cache
+            page.get_by_label("Stimme").click()
+            with page.expect_request("**/riva/voice_preview/marin"):
+                page.get_by_role("option", name="Marin").click()
+            page.get_by_label("Stimme").click()
+            page.get_by_role("option", name="Coral").click()
+        assert page.evaluate("window.rivaPreviewPlays") >= 3
+        page.get_by_label("Stimme").click()
+        page.get_by_role("option", name="Marin").click()
+        (session,) = app.runtime.active()
+        deadline = time.monotonic() + 10
+        while session.settings.voice != "marin" and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert session.settings.voice == "marin"
+        # one synthesis per previewed voice, however often it was chosen
+        assert voices_used[previews_before:] == ["marin", "coral"]
+        assert app.runtime.voices.generated == 2
+        page.get_by_role("button", name="▶ Start").click()
+        page.wait_for_function("window.__phases.includes('speaking')", timeout=90_000)
+        assert voices_used[-1] == "marin"  # the reply is spoken in the chosen voice

@@ -11,7 +11,7 @@ from support.ui import LISTENING, SlowTone, load
 
 from riva.demo.fakes import EchoTurnLLM, FakeProbe
 from riva.demo.providers import Providers
-from riva.experiments.vad_self_test import SyntheticWire
+from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
 
 
 def demo(tmp_path: Path, probe: FakeProbe | None = None, seconds: int = 1) -> Any:
@@ -184,3 +184,29 @@ def test_the_presenter_page_has_no_serious_accessibility_problems(
         ]
         assert serious == [], serious
         time.sleep(0)
+
+
+def test_preparing_all_voices_needs_the_cost_confirmation(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    class FastTone(SlowTone):
+        def speech(self, phrase: str, config: Any) -> Any:
+            yield from SyntheticReplyProvider.speech(self, phrase, config)
+
+    providers = Providers(EchoTurnLLM(), FastTone(), SyntheticWire)
+    with (
+        running_demo_app(tmp_path, providers, probe=FakeProbe()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = open_presenter(context, app)
+        page.get_by_role("button", name="Alle Stimmen vorbereiten (kostet Geld)").click()
+        page.get_by_text("Bitte zuerst bestätigen").first.wait_for(timeout=10_000)
+        assert app.runtime.voices.generated == 0
+        page.get_by_label("Ja, die Kosten (wenige Cent) sind in Ordnung").check()
+        page.get_by_role("button", name="Alle Stimmen vorbereiten (kostet Geld)").click()
+        page.get_by_text("10 neu erzeugt, 0 waren schon vorhanden").wait_for(timeout=20_000)
+        assert app.runtime.voices.cached_count() == 10
+        page.get_by_role("button", name="Automatisch prüfen").click()
+        page.locator("#pf-table").get_by_text("Alle 10 Vorschauen sind da.").wait_for(
+            timeout=15_000
+        )

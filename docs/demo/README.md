@@ -19,6 +19,10 @@ Open http://localhost:7863 in Chrome, press **▶ Start**, allow the microphone 
 Each page load is its own session. The first request to the real services is billed by OpenAI; use `--fake`
 to practise.
 
+Voice previews are cached under `<private>/research-data/demo-1-cache/voice-previews/` (key: model + voice +
+sentence). A voice's first preview costs one TTS request (a fraction of a cent); the presenter page has
+**Alle Stimmen vorbereiten** (needs the cost tick) to prepare all ten before the demo.
+
 Customize without code: personas, the shared journaling/safety rules, the LLM allowlist, voices, the
 preview sentence and limits are in `src/riva/demo/defaults/*.toml` (copy them into a `--config-dir`).
 
@@ -28,7 +32,8 @@ preview sentence and limits are in `src/riva/demo/defaults/*.toml` (copy them in
   before Start), German, large Start and Stopp buttons, one status indicator
   (😴 Drücke auf Start · 👂 hört zu · 🗣️ hört dich · ✍️ schreibt mit · 🤔 denkt nach · ⏳ bereitet vor ·
   🔊 spricht · ⚠️ Fehler), tabs "Mein Tagebuch" (journal, front) and "Das habe ich gehört" (verbatim ASR),
-  the last spoken reply, and a closed spoiler with read-only technical details.
+  the last spoken reply, a **Stimme** dropdown (picking a voice plays one short preview sentence, the same for
+  every voice, and the voice is used for the next reply), and a closed spoiler with read-only technical details.
 - **Presenter page** (`/presenter/`, German; same machine): (1) pre-flight checks in three groups - runs
   automatically / needs you (microphone permission, test tone) / costs money (voice test, only after a
   confirmation tick); (2) settings - persona, language model, voice, pause threshold - saved for NEW sessions or

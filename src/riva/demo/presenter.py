@@ -153,7 +153,20 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
         if probe is None:
             return preflight.as_rows(preflight.interactive_checks())
         checks = preflight.run_automatic(config, probe, runtime.archive_root)
+        if runtime.voices is not None:
+            checks.append(
+                preflight.voice_cache_check(runtime.voices.cached_count(), len(config.voices))
+            )
         return preflight.as_rows(checks + preflight.interactive_checks())
+
+    def prepare_voices(confirmed: bool) -> str:
+        if runtime.voices is None or not confirmed:
+            return "Bitte zuerst bestätigen, dass die Kosten (wenige Cent) in Ordnung sind."
+        try:
+            made, had = runtime.voices.prepare_all(confirmed=True)
+        except Exception:
+            return "❌ Nicht alle Stimmen konnten erzeugt werden. Bitte später noch einmal."
+        return f"✅ {made} neu erzeugt, {had} waren schon vorhanden."
 
     def voice_test(confirmed: bool, voice: str) -> str:
         if probe is None or not confirmed:
@@ -228,6 +241,10 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
                 confirm = gr.Checkbox(label="Ja, die Kosten (wenige Cent) sind in Ordnung")
                 voice_button = gr.Button("Stimmtest (kostet Geld)", elem_id="pf-voice")
             voice_result = gr.Markdown(elem_id="pf-voice-result")
+            prepare_button = gr.Button(
+                "Alle Stimmen vorbereiten (kostet Geld)", elem_id="pf-prepare"
+            )
+            prepare_result = gr.Markdown(elem_id="pf-prepare-result")
 
         with gr.Accordion("2. Einstellungen", open=True):
             with gr.Row():
@@ -271,6 +288,7 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
         tone_button.click(None, js=TONE_JS, **hide)
         heard_button.click(None, js=HEARD_JS, **hide)
         unheard_button.click(None, js=UNHEARD_JS, **hide)
+        prepare_button.click(prepare_voices, [confirm], [prepare_result], **hide)
         voice_button.click(voice_test, [confirm, test_voice], [voice_result], **hide)
         save_button.click(save_defaults, [persona, model, voice, pause], [settings_result], **hide)
         apply_button.click(
