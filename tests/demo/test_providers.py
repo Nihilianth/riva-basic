@@ -19,9 +19,9 @@ def test_spoken_reply_provider_streams_the_decided_text_and_synthesizes_each_phr
 
     identity = new_development_session()
     saved = RecordingStore(tmp_path).save((24000, np.zeros(12000, dtype=np.int16)), identity)
-    manager = ReplyManager(ReplyConfig(), lambda: SpokenReplyProvider(spoken, Synth()))
+    manager = ReplyManager(ReplyConfig(), lambda: SpokenReplyProvider(Synth()))
     config = ReplyConfig(voice="marin", tts_style="Sprich warm.")
-    run, _ = manager.start(identity, saved, "irrelevant", 0, config)
+    run, _ = manager.start(identity, saved, spoken, 0, config)
     try:
         for _ in run.updates():
             pass

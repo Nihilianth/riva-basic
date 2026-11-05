@@ -23,15 +23,16 @@ class Providers:
 
 
 class SpokenReplyProvider:
-    """``ReplyProvider`` for the existing ``ReplyRun``: the text is already decided (by the turn
-    LLM); this only streams it back as one text part and synthesizes speech phrase by phrase."""
+    """``ReplyProvider`` for the existing ``ReplyRun``: the reply text is already decided (by the
+    turn LLM) and passed in as the run's "transcript"; this streams it back as one text part and
+    synthesizes speech phrase by phrase. One instance can serve every session."""
 
-    def __init__(self, reply_text: str, synth: SpeechSynth) -> None:
-        self.reply_text, self.synth = reply_text, synth
+    def __init__(self, synth: SpeechSynth) -> None:
+        self.synth = synth
 
     def text(self, transcript: str, config: ReplyConfig) -> Iterator[TextPart]:
-        yield TextPart("delta", self.reply_text)
-        yield TextPart("completed", self.reply_text)
+        yield TextPart("delta", transcript)
+        yield TextPart("completed", transcript)
 
     def speech(self, phrase: str, config: ReplyConfig) -> Iterator[bytes]:
         return self.synth.speech(phrase, config)

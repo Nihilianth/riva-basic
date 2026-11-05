@@ -56,3 +56,24 @@ Append-only `Passage` list (`p0`, `p1`, ...; text, turn id, source llm|verbatim_
   clarification is spoken (the model's reply if it already asks a question, else a fixed German sentence).
 - `tail()` / `revisable_ids()` give the LLM the window; `text()` renders one paragraph per passage;
   `snapshot()` is JSON for the session archive.
+
+## Session lifecycle and the commit gate (`riva.demo.session`)
+`DemoSession` = one page load. State: `epoch`, `closed`, `Journal`, recent history, explained words, whether
+the last reply was heard. Stages (`segment_updates`, `answer`) capture an `EpochToken` and pass the gate
+under the session lock before any side effect; `close()` closes the gate first, then releases the reply run
+and the ASR turn (which also drops held transcripts). Late results are not applied; they are written to the
+**old** session's timeline as `stale_discarded` with the stage (`asr`, `after_asr`, `before_llm`,
+`after_llm`). Blocking provider calls cannot be aborted, so their threads finish and the result is dropped.
+`close()` is idempotent; a participant reload creates a new session (new identity and archive folder).
+Speech control: `stop_speech()` (Stopp button) cancels the reply and marks it not heard;
+`note_user_speech_started()` (barge-in) marks the last reply not heard when the user speaks while its audio
+should still be playing. The next LLM input then says the reply was not fully heard, so an unheard
+question may be asked again.
+
+## Session archive (`riva.demo.archive`)
+Content-bearing, private only (`../private/research-data/demo-1/<user>/<session>/`, files 0600): `session.json`
+(settings snapshot, times), `timeline.jsonl` (ISO-timestamped events with relative paths), `utterances/<id>.json`
+(verbatim ASR per segment, merged transcript, LLM input, raw model outputs, outcome, journal change, spoken
+reply), `journal/NNNN.json` snapshots, `journal.md`; per-segment audio/transcripts stay in the turn folders
+written by `RecordingStore`. Nothing in this archive is written to stdout; the ordinary event log carries
+names and opaque ids only (asserted by tests).

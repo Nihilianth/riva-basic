@@ -12,13 +12,15 @@ GERMAN_STOPWORDS = _vocabulary(
     """der die das den dem des ein eine einen einem einer und oder aber ist sind war waren bin bist
     habe hast hat haben ich du er sie es wir ihr nicht auch mit von zu im in am an auf aus bei für
     nach wie was wo wer warum dann dort hier sehr schon noch mal gern gerne ja nein kein keine mein
-    dein heute gestern wenn weil dass wirklich"""
+    dein heute gestern wenn weil dass wirklich also doch denn mir dir mich dich uns"""
 )
 ENGLISH_STOPWORDS = _vocabulary(
     """the a an and or but is are was were am be been have has had i you he she it we they not with
     of to in on at for from as how what where who why then there here very just also my your this
     that because if do does did"""
 )
+# Words that exist in both languages (in, an, was, ...) tell us nothing and count for neither.
+ENGLISH_ONLY = ENGLISH_STOPWORDS - GERMAN_STOPWORDS
 NUMBER_WORDS = {
     "null": "0", "eins": "1", "ein": "1", "eine": "1", "einen": "1", "zwei": "2", "drei": "3",
     "vier": "4", "fünf": "5", "sechs": "6", "sieben": "7", "acht": "8", "neun": "9", "zehn": "10",
@@ -39,7 +41,7 @@ def looks_german(text: str) -> bool:
     """
     tokens = [word.casefold() for word in words(text)]
     german = sum(token in GERMAN_STOPWORDS for token in tokens)
-    english = sum(token in ENGLISH_STOPWORDS for token in tokens)
+    english = sum(token in ENGLISH_ONLY for token in tokens)
     if len(tokens) < 6:
         return english <= german
     return german >= 1 and german > english

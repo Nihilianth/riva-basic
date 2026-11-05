@@ -191,3 +191,5 @@ def test_language_heuristic() -> None:
     # Short German passages without any function word must not be rejected.
     assert looks_german("Große graue Elefanten.") and looks_german("Satz 0 neu.")
     assert not looks_german("Big grey elephants are here.")
+    # Words that exist in both languages or are German ("also", "was", "in") must not look English.
+    assert looks_german("Danke, vier Elefanten also.") and looks_german("Was war in dem Zoo?")

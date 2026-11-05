@@ -55,6 +55,8 @@ class TurnOutcome:
     latency_ms: float
     input_tokens: int = 0
     output_tokens: int = 0
+    user_input: str = ""  # content: for the private archive only, never for the event log
+    raw_outputs: tuple[str, ...] = ()  # content: raw model text of each attempt (private archive)
 
     @property
     def uncertain(self) -> bool:
@@ -91,6 +93,8 @@ class TurnProcessor:
         instructions = build_instructions(self.config, persona_id)
         user_input = build_input(context)
         codes: list[str] = []
+        raw: list[str] = []
+        first_input = user_input
         tokens_in = tokens_out = 0
         for attempt in (1, 2):
             try:
@@ -105,6 +109,7 @@ class TurnProcessor:
                 break
             tokens_in += reply.input_tokens
             tokens_out += reply.output_tokens
+            raw.append(reply.text)
             try:
                 validated = validate_turn(
                     parse_turn(reply.text), context.transcript, revisable_ids=revisable_ids
@@ -123,6 +128,8 @@ class TurnProcessor:
                 (self.clock() - started) * 1000,
                 tokens_in,
                 tokens_out,
+                first_input,
+                tuple(raw),
             )
         # Fallback: the user's words are kept verbatim, marked unedited by the session.
         return TurnOutcome(
@@ -135,4 +142,6 @@ class TurnProcessor:
             (self.clock() - started) * 1000,
             tokens_in,
             tokens_out,
+            first_input,
+            tuple(raw),
         )

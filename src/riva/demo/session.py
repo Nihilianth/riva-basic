@@ -1,0 +1,309 @@
+"""One participant session: journal, history, safe reset and the commit gate.
+
+A session lives from page load to reload/reset. Every asynchronous stage (ASR, LLM call, TTS
+start) captures an ``EpochToken`` first and passes the commit gate - "this session is still the
+current one" - under the session lock before any side effect (journal, archive, speech).
+``close()`` flips the gate before it cancels work, so a result that arrives after a reset is
+discarded (and audited in the OLD session's timeline), never applied to anything. Blocking
+provider calls cannot be aborted; their threads finish and the results are dropped.
+"""
+
+import threading
+import time
+from collections.abc import Callable, Generator
+from dataclasses import dataclass
+from typing import Any
+from uuid import uuid4
+
+from riva.audio.recordings import SavedRecording, SessionIdentity
+from riva.audio.replies import ReplyConfig, ReplyManager, ReplyRun
+from riva.demo.archive import SessionArchive
+from riva.demo.config import DemoConfig
+from riva.demo.journal import Journal, JournalChange
+from riva.demo.prompts import TurnContext
+from riva.demo.turn import TurnOutcome, TurnProcessor
+from riva.experiments.asr_stream import (
+    AsrSessions,
+    SegmentOutcome,
+    SegmentProgress,
+    SegmentTimeline,
+    process_segment,
+)
+
+
+@dataclass(frozen=True)
+class SessionSettings:
+    """What the presenter chose for this session; snapshotted into ``session.json``."""
+
+    persona_id: str
+    model: str
+    voice: str
+
+
+@dataclass(frozen=True)
+class EpochToken:
+    epoch: int
+
+
+@dataclass(frozen=True)
+class TurnReport:
+    utterance_id: str
+    outcome: TurnOutcome
+    change: JournalChange
+    reply_text: str
+    run: ReplyRun | None
+    journal_text: str
+
+
+class DemoSession:
+    def __init__(
+        self,
+        *,
+        identity: SessionIdentity,
+        config: DemoConfig,
+        settings: SessionSettings,
+        processor: TurnProcessor,
+        asr: AsrSessions,
+        replies: ReplyManager,
+        archive: SessionArchive,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        config.persona(settings.persona_id)  # fail early on an unknown persona
+        self.identity, self.config, self.settings = identity, config, settings
+        self.processor, self.asr, self.replies, self.archive = processor, asr, replies, archive
+        self.monotonic = monotonic
+        self.lock = threading.RLock()
+        self.epoch = 0
+        self.closed = False
+        self.journal = Journal(config.journal_tail)
+        self.history: list[tuple[str, str]] = []
+        self.used_words: list[str] = []
+        self.last_reply_heard: bool | None = None
+        self.last_run: ReplyRun | None = None
+        self._journal_version = 0
+        archive.write_session(
+            started_at=archive._stamp(),
+            settings={"persona": settings.persona_id, "llm_model": settings.model,
+                      "voice": settings.voice, "tts_model": config.tts_model},
+        )  # fmt: skip
+        archive.event("session_started")
+
+    # --- gate -------------------------------------------------------------------------------
+
+    def token(self) -> EpochToken:
+        with self.lock:
+            return EpochToken(self.epoch)
+
+    def is_current(self, token: EpochToken) -> bool:
+        with self.lock:
+            return not self.closed and token.epoch == self.epoch
+
+    def _discard(self, stage: str, **fields: Any) -> None:
+        self.archive.event("stale_discarded", stage=stage, **fields)
+
+    # --- ASR --------------------------------------------------------------------------------
+
+    def segment_updates(
+        self, payload: str, token: EpochToken
+    ) -> Generator[SegmentProgress, None, SegmentOutcome | None]:
+        """Run the shared segment pipeline; returns the outcome only if the session is current."""
+        timeline = SegmentTimeline(self.asr, self.identity)
+        try:
+            outcome = yield from process_segment(payload, self.identity, self.asr, timeline)
+        except KeyError:  # the ASR turn was released by a reset while we were waiting
+            self._discard("asr")
+            return None
+        if outcome is None:
+            return None
+        if not self.is_current(token):
+            self._discard("after_asr", segment=outcome.saved.metadata.turn_id)
+            return None
+        self.archive.event(
+            "segment_saved",
+            segment=outcome.saved.metadata.turn_id,
+            audio=self.archive.relative(outcome.saved.audio_path),
+            transcript=self.archive.relative(outcome.saved.audio_path.parent / "transcript.json"),
+            asr_status=outcome.result.status,
+        )
+        return outcome
+
+    # --- one turn ---------------------------------------------------------------------------
+
+    def _context(self, text: str) -> TurnContext:
+        return TurnContext(
+            transcript=text,
+            journal_tail=self.journal.tail(),
+            history=tuple(self.history[-self.config.history_exchanges :]),
+            used_words=tuple(self.used_words),
+            last_reply_heard=self.last_reply_heard,
+        )
+
+    def _reply_config(self) -> ReplyConfig:
+        persona = self.config.persona(self.settings.persona_id)
+        return ReplyConfig(
+            tts_model=self.config.tts_model,
+            voice=self.settings.voice,
+            tts_style=persona.tts_style,
+        )
+
+    def answer(
+        self,
+        merged_text: str,
+        saved: SavedRecording,
+        asr_texts: list[str],
+        segment_ids: list[str],
+        token: EpochToken,
+        client_started_ms: float = 0.0,
+    ) -> TurnReport | None:
+        """LLM turn, journal and spoken reply for one merged utterance (blocks during the LLM)."""
+        utterance_id = uuid4().hex
+        with self.lock:
+            if self.closed or token.epoch != self.epoch:
+                self._discard("before_llm", utterance=utterance_id)
+                return None
+            context = self._context(merged_text)
+            revisable = self.journal.revisable_ids()
+            settings = self.settings
+        self.archive.event("turn_started", utterance=utterance_id, segments=segment_ids)
+        outcome = self.processor.process(
+            context, persona_id=settings.persona_id, model=settings.model, revisable_ids=revisable
+        )
+        self.archive.event(
+            "llm_response",
+            utterance=utterance_id,
+            source=outcome.source,
+            attempts=outcome.attempts,
+            error_codes=list(outcome.error_codes),
+            latency_ms=round(outcome.latency_ms),
+            tokens=[outcome.input_tokens, outcome.output_tokens],
+        )
+        with self.lock:
+            if self.closed or token.epoch != self.epoch:
+                self._discard("after_llm", utterance=utterance_id)
+                return None
+            return self._commit(
+                utterance_id, outcome, merged_text, saved, asr_texts, segment_ids, client_started_ms
+            )
+
+    def _commit(
+        self,
+        utterance_id: str,
+        outcome: TurnOutcome,
+        merged_text: str,
+        saved: SavedRecording,
+        asr_texts: list[str],
+        segment_ids: list[str],
+        client_started_ms: float,
+    ) -> TurnReport:
+        """Apply the turn. Caller holds the lock and has passed the commit gate."""
+        change = self.journal.apply(outcome, saved.metadata.turn_id)
+        reply_text = change.reply_override or outcome.spoken_reply
+        self.history.append((merged_text, reply_text))
+        del self.history[: -self.config.history_exchanges]
+        if outcome.result and outcome.result.vocabulary:
+            self.used_words.append(outcome.result.vocabulary[0])
+        self.last_reply_heard = None  # the new reply has not been heard yet
+        self._journal_version += 1
+        journal_path = self.archive.write_journal(
+            self._journal_version, self.journal.snapshot(), self.journal.text()
+        )
+        self.archive.write_utterance(
+            utterance_id,
+            {
+                "utterance_id": utterance_id,
+                "segments": segment_ids,
+                "verbatim_asr": asr_texts,  # exactly what ASR returned, per segment
+                "merged_transcript": merged_text,
+                "settings": {"persona": self.settings.persona_id, "llm_model": self.settings.model,
+                             "voice": self.settings.voice},
+                "llm_input": outcome.user_input,
+                "llm_raw_outputs": list(outcome.raw_outputs),
+                "outcome": {
+                    "source": outcome.source,
+                    "attempts": outcome.attempts,
+                    "error_codes": list(outcome.error_codes),
+                    "uncertain": outcome.uncertain,
+                    "soft_flags": list(outcome.validated.soft_flags) if outcome.validated else [],
+                    "flags": list(outcome.flags),
+                    "grounding": outcome.validated.grounding if outcome.validated else None,
+                    "latency_ms": round(outcome.latency_ms),
+                    "tokens": [outcome.input_tokens, outcome.output_tokens],
+                },
+                "journal_change": {"kind": change.kind, "passage": change.passage_id,
+                                   "previous_text": change.previous_text, "reason": change.reason},
+                "journal_version": self._journal_version,
+                "spoken_reply": reply_text,
+            },
+        )  # fmt: skip
+        self.archive.event(
+            "journal_applied",
+            utterance=utterance_id,
+            change=change.kind,
+            passage=change.passage_id,
+            journal=journal_path,
+        )
+        if "possible_distress" in outcome.flags:
+            self.archive.event("presenter_alert", utterance=utterance_id, kind="possible_distress")
+        run: ReplyRun | None = None
+        try:
+            run, _ = self.replies.start(
+                self.identity, saved, reply_text, client_started_ms, self._reply_config()
+            )
+            self.last_run = run
+            self.archive.event(
+                "reply_started", utterance=utterance_id, generation=run.generation_id
+            )
+        except (ValueError, OSError):
+            self.archive.event("reply_failed", utterance=utterance_id, code="reply_start_failed")
+        return TurnReport(utterance_id, outcome, change, reply_text, run, self.journal.text())
+
+    # --- speech control ---------------------------------------------------------------------
+
+    def stop_speech(self) -> bool:
+        """The participant pressed Stopp: end the reply now and remember it was not fully heard."""
+        with self.lock:
+            run = self.last_run
+            if self.closed or run is None:
+                return False
+        stopped = self.replies.stop(self.identity)
+        if stopped is None:
+            return False
+        with self.lock:
+            self.last_reply_heard = False
+        self.archive.event(
+            "speech_stopped",
+            generation=stopped.generation_id,
+            heard_ms=stopped.snapshot().get("playback_duration_ms"),
+        )
+        return True
+
+    def note_user_speech_started(self) -> None:
+        """Barge-in: if the user starts speaking while the reply should still be playing, the last
+        reply counts as not fully heard (so an unheard follow-up question may be asked again)."""
+        with self.lock:
+            run = self.last_run
+            if self.closed or run is None or self.last_reply_heard is not None:
+                return
+            snapshot = run.snapshot()
+            audio_s = float(snapshot.get("audio_seconds_produced") or 0)  # type: ignore[arg-type]
+            first_audio = (run.first_audio_ms or 0) / 1000
+            playing_until = run.started + first_audio + audio_s
+            if run.status == "cancelled" or self.monotonic() < playing_until:
+                self.last_reply_heard = False
+                self.archive.event("reply_interrupted", generation=run.generation_id)
+            else:
+                self.last_reply_heard = True
+
+    # --- reset ------------------------------------------------------------------------------
+
+    def close(self, reason: str = "reset") -> None:
+        """End the session. Idempotent. In-flight work is cancelled; late results are discarded."""
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True  # the gate closes first, then work is cancelled
+            self.epoch += 1
+        self.replies.release(self.identity)
+        self.asr.release(self.identity)
+        self.archive.event("session_closed", reason=reason)
+        self.archive.write_session(closed_at=self.archive._stamp(), close_reason=reason)
