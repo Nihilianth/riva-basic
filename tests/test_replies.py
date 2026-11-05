@@ -454,3 +454,31 @@ def test_cancel_generating_leaves_a_completed_reply_untouched(tmp_path):
         assert json.loads((run.root / "reply.json").read_text())["status"] == "completed"
     finally:
         manager.release(identity)
+
+
+def test_a_per_session_config_overrides_voice_and_speaking_style(tmp_path):
+    seen = []
+
+    class Provider(FakeReplyProvider):
+        def speech(self, phrase, config):
+            seen.append((config.voice, config.tts_style))
+            return super().speech(phrase, config)
+
+    identity, saved = saved_turn(tmp_path)
+    manager = ReplyManager(ReplyConfig(), Provider)
+    custom = ReplyConfig(voice="onyx-test", tts_style="Sprich langsam und warm.")
+    run, _ = manager.start(identity, saved, "Test.", 0, custom)
+    try:
+        for _ in run.updates():
+            pass
+        assert run.done.wait(2)
+        assert set(seen) == {("onyx-test", "Sprich langsam und warm.")}
+        assert run.config is custom or run.config == custom
+    finally:
+        manager.release(identity)
+
+
+def test_tts_style_must_be_short_nonempty_text():
+    for bad in ("", "  ", "x" * 301):
+        with pytest.raises(ValueError, match="tts_style"):
+            ReplyConfig(tts_style=bad)

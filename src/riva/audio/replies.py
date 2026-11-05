@@ -36,6 +36,7 @@ class ReplyConfig:
     llm_model: str = "gpt-4.1-mini"
     tts_model: str = "gpt-4o-mini-tts"
     voice: str = "coral"
+    tts_style: str = "Sprich klares, ruhiges Deutsch. Natürlich und langsam."
     max_chars: int = 1200
     max_audio_seconds: int = 45
     max_seconds: int = 60
@@ -43,6 +44,8 @@ class ReplyConfig:
     def __post_init__(self) -> None:
         if self.max_chars <= 0 or self.max_audio_seconds <= 0 or self.max_seconds <= 0:
             raise ValueError("Reply limits must be positive")
+        if not self.tts_style.strip() or len(self.tts_style) > 300:
+            raise ValueError("tts_style must be short, non-empty text")
 
 
 @dataclass(frozen=True)
@@ -100,7 +103,7 @@ class OpenAIReplyProvider:
                 model=config.tts_model,
                 voice=config.voice,
                 input=phrase,
-                instructions="Sprich klares, ruhiges Deutsch. Natürlich und langsam.",
+                instructions=config.tts_style,
                 response_format="pcm",
             ) as response,
         ):
@@ -474,7 +477,9 @@ class ReplyManager:
         saved: SavedRecording,
         transcript: str,
         client_started_ms: float,
+        config: ReplyConfig | None = None,
     ) -> tuple[ReplyRun, bool]:
+        """Start (or reuse) the reply for a saved turn; ``config`` overrides the manager default."""
         if (identity.user_id, identity.session_id) != (
             saved.metadata.user_id,
             saved.metadata.session_id,
@@ -489,7 +494,9 @@ class ReplyManager:
                 ):
                     return old, False
                 old.close()
-            run = ReplyRun(saved, transcript, self.config, self.factory(), client_started_ms)
+            run = ReplyRun(
+                saved, transcript, config or self.config, self.factory(), client_started_ms
+            )
             self.runs[identity.session_id] = run
             return run, True
 

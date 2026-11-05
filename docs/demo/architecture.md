@@ -25,3 +25,13 @@ stage line; browser tests and operators can read how the player behaved without 
 - `config.py` + `defaults/*.toml`: personas, models, voices, limits (validated).
 - `prompts.py`: `build_instructions(core + persona)` and `build_input(TurnContext)`.
 Not yet built: processor with provider interfaces, journal, session lifecycle, archive, UI.
+
+## Shared segment pipeline (`riva.experiments.asr_stream`)
+The developer voice app and the demo share these pieces; behavior is covered by the existing tests:
+- `SegmentTimeline`: allowlisted diagnostic stages (no content), mirrored to the session for the UI poll.
+- `process_segment()`: validate the VAD payload, save the exact segment privately, run ASR; yields
+  `SegmentProgress` and returns a `SegmentOutcome` (or `None` when rejected/not persisted).
+- `gate_transcript()`: the hold/merge rule - while the user speaks (or spoke again after this segment) the
+  transcript is held; otherwise held + new text are merged into one turn (`TurnDecision`).
+- `vad_segment_updates()`: the developer-UI wrapper (reply streaming and its tuple outputs).
+- `ReplyManager.start(..., config)`: a per-session `ReplyConfig` (voice, `tts_style`, models) overrides the default.

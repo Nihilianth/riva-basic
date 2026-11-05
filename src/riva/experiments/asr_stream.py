@@ -10,7 +10,7 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -224,55 +224,63 @@ def asr_app_kwargs(app: "gr.Blocks") -> dict[str, Any]:
     return {"middleware": [Middleware(AudioDeliveryMiddleware, fn_index=index)]}
 
 
-def vad_segment_updates(
-    payload: str,
-    identity: SessionIdentity,
-    sessions: AsrSessions,
-    replies: ReplyManager | None,
-    *,
-    allow_synthetic: bool = False,
-) -> Iterator[tuple[Any, ...]]:
-    """Persist and transcribe one browser-VAD-owned 16 kHz PCM16 segment."""
-    handler_started = time.monotonic()
-    timeline: list[dict[str, Any]] = []
-    sessions.update_vad_diagnostics(identity, timeline)
+class SegmentTimeline:
+    """Allowlisted diagnostic stages for one segment, mirrored into the session for the UI poll."""
 
-    def record(stage: str, source: str = "server", elapsed_ms: float | None = None) -> None:
-        timeline.append(
+    def __init__(self, sessions: "AsrSessions", identity: SessionIdentity) -> None:
+        self.sessions, self.identity = sessions, identity
+        self.started = time.monotonic()
+        self.rows: list[dict[str, Any]] = []
+        sessions.update_vad_diagnostics(identity, self.rows)
+
+    def record(self, stage: str, source: str = "server", elapsed_ms: float | None = None) -> None:
+        self.rows.append(
             {
                 "stage": stage,
                 "source": source,
                 "elapsed_ms": round(elapsed_ms, 1)
                 if elapsed_ms is not None
-                else round((time.monotonic() - handler_started) * 1000, 1),
+                else round((time.monotonic() - self.started) * 1000, 1),
             }
         )
-        sessions.update_vad_diagnostics(identity, timeline)
+        self.sessions.update_vad_diagnostics(self.identity, self.rows)
 
-    from gradio import skip
 
-    sent_to_llm: str | None = None  # shown in the UI only; never logged
+@dataclass(frozen=True)
+class SegmentProgress:
+    """What the UI may show while a segment is processed (no audio, no provider errors)."""
 
-    def update(
-        partial: str = "",
-        final: str = "",
-        status: str = "",
-        metadata: dict[str, Any] | None = None,
-        reply: str = "",
-        metrics: dict[str, Any] | None = None,
-    ) -> tuple[Any, ...]:
-        return (
-            partial,
-            final,
-            status,
-            metadata or {},
-            reply,
-            metrics or {},
-            str((metrics or {}).get("generation_id", "")),
-            list(timeline),
-            sent_to_llm if sent_to_llm is not None else skip(),
-        )
+    partial: str = ""
+    final: str = ""
+    status: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass(frozen=True)
+class SegmentOutcome:
+    saved: SavedRecording
+    result: Transcript
+    duration: float
+    started_ms: float
+    segment_end_ms: float | None
+    synthetic: bool
+
+
+def process_segment(
+    payload: str,
+    identity: SessionIdentity,
+    sessions: "AsrSessions",
+    timeline: SegmentTimeline,
+    *,
+    allow_synthetic: bool = False,
+) -> Generator[SegmentProgress, None, SegmentOutcome | None]:
+    """Validate, privately save and transcribe one browser-VAD 16 kHz PCM16 segment.
+
+    Yields progress for the UI; returns the outcome, or ``None`` when the segment was rejected
+    or could not be persisted (the last progress then carries the German-neutral status text).
+    Everything after the transcript (reply, LLM turn) belongs to the caller.
+    """
+    record = timeline.record
     segment_end_ms: float | None = None
     try:
         if not isinstance(payload, str) or len(payload) > 1_400_000:
@@ -329,8 +337,8 @@ def vad_segment_updates(
         record("asr.turn_accepted")
     except (KeyError, ValueError, OSError, binascii.Error):
         record("segment.rejected")
-        yield update(status="VAD segment rejected or could not be processed")
-        return
+        yield SegmentProgress(status="VAD segment rejected or could not be processed")
+        return None
 
     finished = threading.Event()
     finish_result: dict[str, Any] = {}
@@ -370,11 +378,11 @@ def vad_segment_updates(
                 record(stage)
             saved_during_turn = sessions.current(identity).saved
             metadata = asdict(saved_during_turn.metadata) if saved_during_turn else {}
-            yield update(
-                partial=result.partial,
-                final=result.text or "",
-                status=f"ASR {result.status} · segment {duration:.2f} s",
-                metadata=metadata,
+            yield SegmentProgress(
+                result.partial,
+                result.text or "",
+                f"ASR {result.status} · segment {duration:.2f} s",
+                metadata,
             )
         if finished.is_set():
             break
@@ -382,43 +390,114 @@ def vad_segment_updates(
     finish_thread.join(timeout=0)
     if "error" in finish_result:
         record("asr.persist_failed")
-        yield update(status="VAD segment could not be persisted")
-        return
+        yield SegmentProgress(status="VAD segment could not be persisted")
+        return None
     saved = finish_result["saved"]
     result, duration = sessions.snapshot(identity)
     record("recording.persisted")
+    return SegmentOutcome(saved, result, duration, float(started_ms), segment_end_ms, synthetic)
+
+
+@dataclass(frozen=True)
+class TurnDecision:
+    """Hold the transcript for later, or answer now with everything not yet answered merged."""
+
+    hold: bool
+    merged: str = ""
+    previous: tuple[str, ...] = ()
+
+
+def gate_transcript(
+    sessions: "AsrSessions",
+    identity: SessionIdentity,
+    text: str,
+    segment_end_ms: float | None,
+    saved: SavedRecording,
+) -> TurnDecision:
+    """Shared hold/merge rule (riva-b9r): wait while the user speaks, else merge held + new."""
+    if sessions.newer_speech(identity, segment_end_ms):
+        sessions.hold(identity, [text])
+        write_event(
+            Event(EventName.RESPONSE_HELD, identity.session_id, saved.metadata.turn_id),
+            sys.stdout,
+        )
+        return TurnDecision(hold=True, merged=merge_transcripts(sessions.held_preview(identity)))
+    previous = sessions.take_held(identity)
+    return TurnDecision(
+        hold=False, merged=merge_transcripts([*previous, text]), previous=tuple(previous)
+    )
+
+
+def vad_segment_updates(
+    payload: str,
+    identity: SessionIdentity,
+    sessions: "AsrSessions",
+    replies: ReplyManager | None,
+    *,
+    allow_synthetic: bool = False,
+) -> Iterator[tuple[Any, ...]]:
+    """Developer-UI flow: persist and transcribe a VAD segment, then optionally LLM/TTS reply."""
+    timeline = SegmentTimeline(sessions, identity)
+    record = timeline.record
+    from gradio import skip
+
+    sent_to_llm: str | None = None  # shown in the UI only; never logged
+
+    def update(
+        partial: str = "",
+        final: str = "",
+        status: str = "",
+        metadata: dict[str, Any] | None = None,
+        reply: str = "",
+        metrics: dict[str, Any] | None = None,
+    ) -> tuple[Any, ...]:
+        return (
+            partial,
+            final,
+            status,
+            metadata or {},
+            reply,
+            metrics or {},
+            str((metrics or {}).get("generation_id", "")),
+            list(timeline.rows),
+            sent_to_llm if sent_to_llm is not None else skip(),
+        )
+
+    segment = process_segment(
+        payload, identity, sessions, timeline, allow_synthetic=allow_synthetic
+    )
+    try:
+        while True:
+            progress = next(segment)
+            yield update(progress.partial, progress.final, progress.status, progress.metadata)
+    except StopIteration as stop:
+        outcome: SegmentOutcome | None = stop.value
+    if outcome is None:
+        return
+
+    saved, result, duration = outcome.saved, outcome.result, outcome.duration
     detail = f"VAD segment saved · {duration:.2f} s · ASR {result.status}"
     metadata = {**asdict(saved.metadata), "transcription_status": result.status}
-    if synthetic:
+    if outcome.synthetic:
         detail = "SYNTHETIC TEST · " + detail
         metadata["synthetic"] = True
     run = None
-    previous: list[str] = []
-    held_now = False
+    created = False
+    decision = TurnDecision(hold=False)
     if replies is not None and result.status == "completed" and result.text:
-        if sessions.newer_speech(identity, segment_end_ms):
-            # The user is still talking (or talked again): answer everything together later.
-            sessions.hold(identity, [result.text])
-            held_now = True
-            sent_to_llm = "(wartet auf weitere Sprache) " + merge_transcripts(
-                sessions.held_preview(identity)
-            )
-            write_event(
-                Event(EventName.RESPONSE_HELD, identity.session_id, saved.metadata.turn_id),
-                sys.stdout,
-            )
+        decision = gate_transcript(sessions, identity, result.text, outcome.segment_end_ms, saved)
+        if decision.hold:
+            sent_to_llm = "(wartet auf weitere Sprache) " + decision.merged
             detail += " · wartet auf weitere Sprache"
         else:
-            previous = sessions.take_held(identity)
-            merged = merge_transcripts([*previous, result.text])
-            sent_to_llm = merged
+            sent_to_llm = decision.merged
             try:
-                run, created = replies.start(identity, saved, merged, float(started_ms))
+                run, created = replies.start(identity, saved, decision.merged, outcome.started_ms)
             except (ValueError, OSError):
-                sessions.hold(identity, [*previous, result.text], front=True)
+                sessions.hold(identity, [*decision.previous, result.text], front=True)
                 run = None
                 detail += " · Antwort konnte nicht gestartet werden"
-    if held_now:
+    if decision.hold:
         record("reply.held")
     else:
         record("reply.generation_started" if run else "reply.not_started")
@@ -453,7 +532,7 @@ def vad_segment_updates(
         heard = run.first_playback_ms is not None or run.playback_signal_received
         if run.status == "cancelled" and not heard:
             # Nobody heard this reply: the next turn must answer these words as well.
-            sessions.hold(identity, [*previous, result.text or ""], front=True)
+            sessions.hold(identity, [*decision.previous, result.text or ""], front=True)
         record(
             {"completed": "reply.completed", "cancelled": "reply.cancelled"}.get(
                 run.status, "reply.failed"
