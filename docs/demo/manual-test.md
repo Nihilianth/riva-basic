@@ -31,7 +31,7 @@ Recordings, transcripts and journals land in `../private/research-data/` (never 
 - [ ] Answer the question (*"Elefanten und einen ganz großen Löwen."*): a second journal paragraph appears, and the reply refers to what you said.
 - [ ] Correct yourself: *"Nein, es waren drei Elefanten."* The old entry changes only if it was unambiguous; otherwise the assistant asks.
 - [ ] Say something unclear on purpose (mumble, or a half sentence): it asks again instead of inventing.
-- [ ] **Stimme** dropdown: choose another voice, a short preview sentence plays; the next reply uses that voice.
+- [ ] **Stimme** dropdown: choose another voice - the preview sentence plays **once** per choice (each new voice costs one tiny TTS request the first time); the next reply uses that voice. In `../private/logs/demo.log` every `tts.requested` line shows the voice in `detail`.
 - [ ] Dark system theme (if you use it): the page stays light. Tab/Enter reach Start and Stopp; focus is clearly visible.
 
 ## 3. Stopp in every state

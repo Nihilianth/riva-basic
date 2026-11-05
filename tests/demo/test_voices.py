@@ -112,3 +112,17 @@ def test_the_preview_endpoint_serves_wav_and_rejects_unknown_voices(tmp_path) ->
     assert synth.phrases == [CONFIG.preview_sentence]  # second request came from the cache
     assert client.get("/riva/voice_preview/robot").status_code == 404
     assert client.get("/riva/voice_preview/..%2Fsecret").status_code == 404
+
+
+def test_a_preview_synthesis_is_counted_in_the_log_with_its_voice(tmp_path, capsys) -> None:
+    import json
+
+    previews = VoicePreviews(tmp_path / "cache", CountingSynth(), CONFIG)
+    previews.get("echo")
+    previews.get("echo")  # cached: no second request, no second log line
+    previews.get("alloy")
+    events = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+    assert [(e["name"], e["detail"]) for e in events] == [
+        ("tts.requested", "echo"), ("tts.requested", "alloy"),
+    ]  # fmt: skip
+    assert CONFIG.preview_sentence not in json.dumps(events)  # content-free

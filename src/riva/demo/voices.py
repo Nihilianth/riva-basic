@@ -8,6 +8,7 @@ preview is only generated when a person picks the voice (or the presenter confir
 
 import hashlib
 import os
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ from riva.audio.recordings import private_directory
 from riva.audio.replies import ReplyConfig, pcm_wav
 from riva.demo.config import DemoConfig
 from riva.demo.providers import SpeechSynth
+from riva.event_log import Event, EventName, write_event
 
 
 class VoiceError(Exception):
@@ -50,6 +52,8 @@ class VoicePreviews:
         with self._locks[voice]:
             if target.is_file():
                 return target
+            # Content-free: a preview is a real TTS request, so it is counted and names its voice.
+            write_event(Event(EventName.TTS_REQUESTED, "preview", detail=voice), sys.stdout)
             try:
                 reply_config = ReplyConfig(tts_model=self.config.tts_model, voice=voice)
                 pcm = b"".join(self.synth.speech(self.config.preview_sentence, reply_config))

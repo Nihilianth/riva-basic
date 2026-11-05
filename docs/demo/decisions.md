@@ -172,3 +172,17 @@ Real two-turn smoke test (same synthetic clips and procedure as the baseline; es
 | **End of speech -> first audio ready** | **10.9 s / 7.9 s** | **7.9 s / 4.7 s** | **6.5 s / 5.0 s** |
 Transcripts identical, one LLM attempt per turn, no errors. Saving of about 2.2-2.5 s per turn from A itself; the rest
 of the difference is LLM/TTS variance. Browser VAD pause and playback start are not included.
+
+## First manual run: findings and fixes (2026-11-05, riva-skm.22)
+The user heard "several voices". Checked in the archive and logs (voice/settings fields only, no spoken content):
+- Both replies were spoken in the **selected** voice (`alloy`, `reply.json` config). What was heard besides were the
+  **previews**: the dropdown plays a short sentence per choice (echo, coral, alloy = 3 cached syntheses) - and each
+  choice was handled **twice** (two `settings_changed` events, the preview played twice) and one extra request with an
+  empty voice (`voice_preview/null`) fired when the list opened. Fixed: an empty voice is ignored, a repeated choice
+  within 1.5 s plays once, the server applies only a real change.
+- **Audit bug**: `reply.json` of completed replies was overwritten with `status: cancelled` when the page unloaded
+  (`ReplyRun.close()` called `stop()`). `close()` (cleanup) now keeps a finished run's status and metrics; an explicit
+  Stopp still cancels. Existing stored replies from that run keep the wrong status.
+- **Log gap**: `tts.requested` now carries the voice (token) for replies and for previews (previews were not logged at
+  all), so "which voice did this request use" is answerable from the ordinary log. Request count for that run: 3 previews
+  + 4 reply phrases = 7.

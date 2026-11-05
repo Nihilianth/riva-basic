@@ -482,3 +482,50 @@ def test_tts_style_must_be_short_nonempty_text():
     for bad in ("", "  ", "x" * 301):
         with pytest.raises(ValueError, match="tts_style"):
             ReplyConfig(tts_style=bad)
+
+
+def test_closing_a_finished_reply_keeps_its_true_status_but_a_stop_cancels_it(tmp_path):
+    identity, saved = saved_turn(tmp_path)
+    manager = ReplyManager(ReplyConfig(), FakeReplyProvider)
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    for _ in run.updates():
+        pass
+    assert run.done.wait(2) and run.status == "completed"
+    manager.release(identity)  # session end: cleanup, not a participant action
+    assert run.status == "completed" and run.stopped_ms is None
+    stored = json.loads((run.root / "reply.json").read_text())
+    assert stored["status"] == "completed" and stored["stopped_ms"] is None
+    # An explicit Stopp (the participant ending playback) still cancels a fully generated reply.
+    other, saved2 = saved_turn(tmp_path / "2")
+    manager2 = ReplyManager(ReplyConfig(), FakeReplyProvider)
+    run2, _ = manager2.start(other, saved2, "Test.", 0)
+    for _ in run2.updates():
+        pass
+    assert run2.done.wait(2)
+    manager2.stop(other)
+    assert run2.status == "cancelled"
+
+
+def test_a_running_reply_is_still_cancelled_when_its_session_is_released(tmp_path):
+    identity, saved = saved_turn(tmp_path)
+    provider = FakeReplyProvider(gated=True)
+    manager = ReplyManager(ReplyConfig(), lambda: provider)
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    assert provider.first_speech.wait(2)
+    provider.continue_text.set()
+    manager.release(identity)
+    assert run.status == "cancelled"
+
+
+def test_every_tts_request_names_its_voice_in_the_content_free_log(tmp_path, capsys):
+    identity, saved = saved_turn(tmp_path)
+    manager = ReplyManager(ReplyConfig(voice="marin"), FakeReplyProvider)
+    run, _ = manager.start(identity, saved, "Test.", 0)
+    for _ in run.updates():
+        pass
+    manager.release(identity)
+    events = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
+    tts = [e for e in events if e["name"] == "tts.requested"]
+    assert tts and {e["detail"] for e in tts} == {"marin"}

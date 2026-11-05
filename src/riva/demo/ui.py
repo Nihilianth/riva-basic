@@ -131,7 +131,14 @@ STOP_SEQ_JS = """
 PREVIEW_JS = """
 (() => {
   window.rivaPreviewPlays = 0;
+  let lastVoice = '', lastAt = 0;
   window.rivaPlayPreview = (voice) => {
+    // Gradio can report a choice twice, or an empty value when the list opens: play each once.
+    if (typeof voice !== 'string' || !voice) return;
+    const now = Date.now();
+    if (voice === lastVoice && now - lastAt < 1500) return;
+    lastVoice = voice;
+    lastAt = now;
     if (window.rivaStopSpeech) window.rivaStopSpeech();
     if (window.rivaPreviewAudio) { try { window.rivaPreviewAudio.pause(); } catch (_) {} }
     const audio = new Audio('/riva/voice_preview/' + encodeURIComponent(voice));
@@ -294,7 +301,12 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
 
     def set_voice(voice: str, identity: SessionIdentity) -> None:
         session = runtime.ensure(identity)
-        if voice in runtime.config.voices and not session.closed:
+        # Gradio may report one choice more than once: only a real change is applied (and logged).
+        if (
+            voice in runtime.config.voices
+            and not session.closed
+            and voice != session.settings.voice
+        ):
             session.update_settings(replace(session.settings, voice=voice))
 
     def resume(enabled: bool, identity: SessionIdentity) -> None:

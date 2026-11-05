@@ -307,6 +307,11 @@ def test_choosing_a_voice_plays_a_cached_preview_and_is_used_for_the_next_reply(
     wav = compose(tmp_path / "mic.wav", silence(1.0), clip("zoo"), silence(12.0))
     with running_demo_app(tmp_path, spy) as app, mic_browser(playwright_instance, wav) as context:
         page = load(context, app.url)
+        previews_requested: list[str] = []
+        page.on(
+            "request",
+            lambda r: previews_requested.append(r.url) if "/riva/voice_preview/" in r.url else None,
+        )
         page.get_by_role("button", name="▶ Start").wait_for()
         assert page.get_by_label("Stimme").is_visible()
         previews_before = len(voices_used)
@@ -316,10 +321,20 @@ def test_choosing_a_voice_plays_a_cached_preview_and_is_used_for_the_next_reply(
                 page.get_by_role("option", name="Marin").click()
             page.get_by_label("Stimme").click()
             page.get_by_role("option", name="Coral").click()
-        assert page.evaluate("window.rivaPreviewPlays") >= 3
+        # Each choice is played exactly once: no duplicate play, no empty-voice request.
+        assert page.evaluate("window.rivaPreviewPlays") == 4  # marin, coral, marin, coral
+        # (the browser may answer a repeated preview from its own cache, so requests <= plays)
+        assert not any(url.endswith(("null", "undefined", "/")) for url in previews_requested)
+        assert 3 <= len(previews_requested) <= 4
         page.get_by_label("Stimme").click()
         page.get_by_role("option", name="Marin").click()
         (session,) = app.runtime.active()
+        changes = [
+            line
+            for line in (session.archive.directory / "timeline.jsonl").read_text().splitlines()
+            if "settings_changed" in line
+        ]
+        assert len(changes) <= 5  # one per real change: marin, coral, marin, coral, marin
         deadline = time.monotonic() + 10
         while session.settings.voice != "marin" and time.monotonic() < deadline:
             time.sleep(0.1)

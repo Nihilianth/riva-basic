@@ -262,3 +262,14 @@ def test_a_revision_is_recorded_with_its_utterance_in_the_journal_snapshot(tmp_p
     assert passage["text"] == "Ich habe drei Elefanten gesehen."
     assert passage["revisions"][0]["previous_text"] == "Ich habe zwei Elefanten gesehen."
     assert passage["revisions"][0]["utterance_text"] == "Nein, es waren drei Elefanten."
+
+
+def test_ending_a_session_does_not_rewrite_a_completed_reply_as_cancelled(tmp_path) -> None:
+    h = make_harness(tmp_path)
+    h.synth.release.set()
+    report = h.answer("Hallo")
+    finish_run(report.run)
+    assert report.run.status == "completed"
+    h.session.close("page_unloaded")  # what a reload does
+    stored = json.loads((report.run.root / "reply.json").read_text())
+    assert stored["status"] == "completed" and stored["stopped_ms"] is None

@@ -292,6 +292,7 @@ class ReplyRun:
                         self.saved.metadata.session_id,
                         self.saved.metadata.turn_id,
                         self.generation_id,
+                        detail=self.config.voice,  # which voice this request used
                     ),
                     sys.stdout,
                 )
@@ -460,6 +461,15 @@ class ReplyRun:
         self.synthesizer.join(timeout=1)
 
     def close(self) -> None:
+        """Release the run (session end, replacement). Unlike ``stop`` - the participant ending
+        playback - this never rewrites a run that already finished: its stored status stays true."""
+        with self.lock:
+            finished = self.status in ("completed", "failed")
+        if finished:
+            self.cancelled.set()  # helper threads are done; make sure nothing lingers
+            self.producer.join(timeout=1)
+            self.synthesizer.join(timeout=1)
+            return
         self.stop()
 
 
