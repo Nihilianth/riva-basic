@@ -24,7 +24,8 @@ preview sentence and limits are in `src/riva/demo/defaults/*.toml` (copy them in
 
 ## What exists now
 
-- **Participant page** (`/`): German, large Start and Stopp buttons, one status indicator
+- **Participant page** (`/`): a short friendly introduction ("So geht's", plain text, nothing plays or listens
+  before Start), German, large Start and Stopp buttons, one status indicator
   (😴 Drücke auf Start · 👂 hört zu · 🗣️ hört dich · ✍️ schreibt mit · 🤔 denkt nach · ⏳ bereitet vor ·
   🔊 spricht · ⚠️ Fehler), tabs "Mein Tagebuch" (journal, front) and "Das habe ich gehört" (verbatim ASR),
   the last spoken reply, and a closed spoiler with read-only technical details. Presenter page: planned.

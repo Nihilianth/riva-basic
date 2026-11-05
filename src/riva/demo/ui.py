@@ -23,6 +23,11 @@ HEAD = "<script>document.documentElement.lang = 'de';</script>"
 CSS = """
 .gradio-container { max-width: 960px !important; margin: 0 auto; font-size: 1.25rem; }
 h1 { font-size: 2.6rem !important; text-align: center; }
+#riva-intro { padding: 1rem 1.4rem; border-radius: 1rem; background: #eff6ff; color: #111827;
+  border: 3px solid #1d4ed8; font-size: 1.4rem; }
+#riva-intro h2 { font-size: 1.8rem; margin: 0 0 0.4rem; }
+#riva-intro ol { margin: 0.2rem 0 0.6rem 1.6rem; line-height: 1.6; }
+#riva-intro p { margin: 0; font-weight: 600; }
 #riva-status {
   display: flex; align-items: center; justify-content: center; gap: 1.2rem;
   padding: 1.2rem; border-radius: 1.2rem; border: 4px solid #1f2937;
@@ -51,6 +56,14 @@ button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible, summar
   outline: 5px solid #1d4ed8 !important; outline-offset: 3px !important; }
 [role="tab"] { font-size: 1.35rem !important; padding: 0.8rem 1.2rem !important; }
 """
+
+INTRO_HTML = (
+    '<section id="riva-intro" aria-labelledby="riva-intro-title"><h2 id="riva-intro-title">'
+    + texts.INTRO_TITLE
+    + "</h2><ol>"
+    + "".join(f"<li>{step}</li>" for step in texts.INTRO_STEPS)
+    + f"</ol><p>{texts.INTRO_NOTE}</p></section>"
+)
 
 STATUS_HTML = (
     '<div id="riva-status" role="status" aria-live="polite" data-phase="idle">'
@@ -204,6 +217,7 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             value=new_development_session, time_to_live=3600, delete_callback=runtime.release
         )
         gr.Markdown(f"# {texts.TITLE}\n\n{texts.SUBTITLE}")
+        gr.HTML(INTRO_HTML)
         gr.HTML(STATUS_HTML)
         with gr.Row():
             start = gr.Button(texts.START, variant="primary", size="lg", elem_id="riva-start")

@@ -2,6 +2,14 @@
 
 TITLE = "Mein Tagebuch"
 SUBTITLE = "Erzähl mir von deinem Tag. Ich schreibe es für dich auf."
+INTRO_TITLE = "So geht's"
+INTRO_STEPS = (
+    "Drücke auf Start.",
+    "Erzähl mir von deinem Tag. Ich höre zu.",
+    "Ich schreibe auf, was du sagst, und stelle dir eine Frage.",
+    "Mit Stopp bin ich still.",
+)
+INTRO_NOTE = "Ich bin ein Computer-Programm, kein Mensch."
 START = "▶ Start"
 STOP = "⏹ Stopp"
 TAB_JOURNAL = "Mein Tagebuch"

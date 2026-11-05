@@ -227,3 +227,32 @@ def test_automated_accessibility_check_finds_no_serious_problems(
             if v["impact"] in ("serious", "critical")
         ]
         assert serious == [], serious
+
+
+def test_the_introduction_is_visible_first_and_nothing_starts_by_itself(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        intro = page.locator("#riva-intro")
+        assert intro.is_visible()
+        text = intro.inner_text()
+        for expected in ("So geht's", "Drücke auf Start.", "Erzähl mir von deinem Tag.", "Stopp",
+                         "kein Mensch"):  # fmt: skip
+            assert expected in text
+        assert intro.get_attribute("aria-labelledby") == "riva-intro-title"
+        page.wait_for_timeout(1500)  # give any automatic start a chance to happen
+        # No microphone, no audio and no playback before the participant presses Start.
+        assert page.evaluate(
+            "window.rivaVad === undefined || !(window.rivaVad.stages || []).length"
+        )
+        assert page.evaluate("window.rivaPlayerStats.ctx") == "none"
+        assert page.evaluate("document.querySelectorAll('audio').length") == 0
+        assert not app.runtime.replies.runs
+        page.get_by_role("button", name="▶ Start").click()
+        page.wait_for_function(LISTENING, timeout=90_000)
+        assert intro.is_visible()  # stays available as a reminder
