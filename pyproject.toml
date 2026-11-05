@@ -19,6 +19,7 @@ riva-archive-session = "riva.dev.archive_session:main"
 riva-audio-test = "riva.experiments.audio_capture:main"
 riva-asr-test = "riva.experiments.asr_stream:main"
 riva-voice-test = "riva.experiments.voice_reply:main"
+riva-demo = "riva.demo.app:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4,<5", "pytest>=8,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]

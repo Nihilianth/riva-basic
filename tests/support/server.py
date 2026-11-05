@@ -57,3 +57,35 @@ def running_voice_app(
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@dataclass
+class RunningDemo:
+    url: str
+    runtime: Any
+
+
+@contextmanager
+def running_demo_app(root: Path, providers: Any) -> Iterator[RunningDemo]:
+    """The real demo page (participant UI) on an ephemeral port with the given fake providers."""
+    from riva.demo.app import build_demo_api, build_runtime
+    from riva.demo.config import load_config
+
+    runtime = build_runtime(load_config(), providers, root / "archive")
+    api = build_demo_api(runtime)
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True, name="riva-demo-test-server")
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not server.started:
+        raise RuntimeError("demo test server did not start")
+    try:
+        yield RunningDemo(f"http://127.0.0.1:{port}", runtime)
+    finally:
+        for session in list(runtime.sessions.values()):
+            session.close("test_end")
+        server.should_exit = True
+        thread.join(timeout=10)

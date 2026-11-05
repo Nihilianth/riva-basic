@@ -77,3 +77,15 @@ Content-bearing, private only (`../private/research-data/demo-1/<user>/<session>
 reply), `journal/NNNN.json` snapshots, `journal.md`; per-segment audio/transcripts stay in the turn folders
 written by `RecordingStore`. Nothing in this archive is written to stdout; the ordinary event log carries
 names and opaque ids only (asserted by tests).
+
+## Participant page (`riva.demo.ui`, `riva.demo.app`, `riva.demo.texts`)
+`riva.demo.app.DemoRuntime` is shared by all sessions (config, providers, `AsrSessions`, one `ReplyManager`
+using `SpokenReplyProvider`, defaults); `ensure(identity)` creates a `DemoSession` per page load, `release`
+closes it. `build_demo_api` mounts the participant Gradio page on the same FastAPI app as the proven
+playback/reply-audio/browser-event routes (`build_voice_api`). All visible strings live in `texts.py`.
+Flow of one utterance in `ui.vad_segment`: `DemoSession.segment_updates` (ASR) -> `on_segment` (hold while
+the user keeps talking, else merge) -> `answer` (LLM turn, commit gate, journal, archive, TTS start) ->
+iterate the `ReplyRun` so its bounded audio queue drains while the page plays the audio from
+`/riva/reply_audio/<id>`. The poll (300 ms) publishes `DemoSession.view()` (phase, journal, verbatim, reply,
+generation id) and the server phase; the page combines it with what only the browser knows (user speaking,
+audio playing) to show one indicator (`INDICATOR_JS`). Start is a real click, which also unlocks audio.

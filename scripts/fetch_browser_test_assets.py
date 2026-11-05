@@ -21,6 +21,7 @@ FILES = [
     "@ricky0123/vad-web@0.0.27/dist/bundle.min.js",
     "@ricky0123/vad-web@0.0.27/dist/vad.worklet.bundle.min.js",
     "@ricky0123/vad-web@0.0.27/dist/silero_vad_v5.onnx",
+    "axe-core@4.10.2/axe.min.js",  # automated accessibility checks (tests only)
 ]
 
 

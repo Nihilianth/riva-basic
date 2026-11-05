@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from riva.audio.recordings import SavedRecording, SessionIdentity
@@ -27,6 +27,7 @@ from riva.experiments.asr_stream import (
     SegmentOutcome,
     SegmentProgress,
     SegmentTimeline,
+    gate_transcript,
     process_segment,
 )
 
@@ -80,6 +81,11 @@ class DemoSession:
         self.used_words: list[str] = []
         self.last_reply_heard: bool | None = None
         self.last_run: ReplyRun | None = None
+        self.verbatim: list[str] = []  # ASR text per saved segment, exactly as returned
+        self.last_reply_text = ""
+        self.phase = "idle"  # what the status indicator shows; see riva.demo.texts.PHASES
+        self._error_until = 0.0
+        self._pending: list[tuple[str, str]] = []  # (segment id, ASR text) held for the next turn
         self._journal_version = 0
         archive.write_session(
             started_at=archive._stamp(),
@@ -101,6 +107,33 @@ class DemoSession:
     def _discard(self, stage: str, **fields: Any) -> None:
         self.archive.event("stale_discarded", stage=stage, **fields)
 
+    def set_phase(self, phase: str) -> None:
+        with self.lock:
+            if not self.closed:
+                self.phase = phase
+
+    def show_error(self, code: str, seconds: float = 6.0) -> None:
+        """Show the friendly German error state for a while; ``code`` is a fixed identifier."""
+        with self.lock:
+            if self.closed:
+                return
+            self.phase = "error"
+            self._error_until = self.monotonic() + seconds
+        self.archive.event("error_shown", code=code)
+
+    def view(self) -> dict[str, str]:
+        """What the participant page shows (poll result); no technical detail."""
+        with self.lock:
+            if self.phase == "error" and self.monotonic() > self._error_until:
+                self.phase = "listening"
+            return {
+                "phase": "closed" if self.closed else self.phase,
+                "journal": self.journal.text(),
+                "heard": "\n\n".join(self.verbatim),
+                "reply": self.last_reply_text,
+                "generation": self.last_run.generation_id if self.last_run else "",
+            }
+
     # --- ASR --------------------------------------------------------------------------------
 
     def segment_updates(
@@ -118,6 +151,9 @@ class DemoSession:
         if not self.is_current(token):
             self._discard("after_asr", segment=outcome.saved.metadata.turn_id)
             return None
+        if outcome.result.status == "completed" and outcome.result.text:
+            with self.lock:
+                self.verbatim.append(outcome.result.text)
         self.archive.event(
             "segment_saved",
             segment=outcome.saved.metadata.turn_id,
@@ -126,6 +162,36 @@ class DemoSession:
             asr_status=outcome.result.status,
         )
         return outcome
+
+    def on_segment(
+        self, outcome: SegmentOutcome, token: EpochToken
+    ) -> TurnReport | Literal["held", "unusable"] | None:
+        """After ASR: hold the words while the user keeps talking, else answer everything together.
+
+        Returns the report, ``"held"`` (waiting for more speech), ``"unusable"`` (ASR failed or
+        empty) or ``None`` (the session was reset meanwhile).
+        """
+        text = outcome.result.text
+        segment_id = outcome.saved.metadata.turn_id
+        if outcome.result.status != "completed" or not text:
+            self.archive.event("segment_unusable", segment=segment_id, asr=outcome.result.status)
+            return "unusable"
+        decision = gate_transcript(
+            self.asr, self.identity, text, outcome.segment_end_ms, outcome.saved
+        )
+        with self.lock:
+            if self.closed or token.epoch != self.epoch:
+                self._discard("before_gate", segment=segment_id)
+                return None
+            if decision.hold:
+                self._pending.append((segment_id, text))
+                self.archive.event("turn_held", segment=segment_id)
+                return "held"
+            ids = [*(i for i, _ in self._pending), segment_id]
+            texts = [*(t for _, t in self._pending), text]
+            self._pending.clear()
+            self.phase = "thinking"
+        return self.answer(decision.merged, outcome.saved, texts, ids, token, outcome.started_ms)
 
     # --- one turn ---------------------------------------------------------------------------
 
@@ -198,6 +264,7 @@ class DemoSession:
         """Apply the turn. Caller holds the lock and has passed the commit gate."""
         change = self.journal.apply(outcome, saved.metadata.turn_id)
         reply_text = change.reply_override or outcome.spoken_reply
+        self.last_reply_text = reply_text
         self.history.append((merged_text, reply_text))
         del self.history[: -self.config.history_exchanges]
         if outcome.result and outcome.result.vocabulary:
@@ -303,6 +370,7 @@ class DemoSession:
                 return
             self.closed = True  # the gate closes first, then work is cancelled
             self.epoch += 1
+            self._pending.clear()
         self.replies.release(self.identity)
         self.asr.release(self.identity)
         self.archive.event("session_closed", reason=reason)

@@ -46,3 +46,14 @@ def recording_provider(
             yield np.clip(np.rint(tone * 32767), -32768, 32767).astype("<i2").tobytes()
 
     return Recording
+
+
+class FailingWire(SyntheticWire):
+    """ASR that reports a provider error as soon as audio arrives (the message is never shown)."""
+
+    def send(self, message: str) -> None:
+        event = json.loads(message)
+        if event.get("type") == "input_audio_buffer.append":
+            self.events.put({"type": "error", "error": {"message": "sensitive provider text"}})
+            return
+        super().send(message)

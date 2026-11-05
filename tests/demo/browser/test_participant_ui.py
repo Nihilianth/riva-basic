@@ -1,0 +1,278 @@
+"""The participant page in headless Chromium: German, simple, accessible, safe to operate."""
+
+import time
+from pathlib import Path
+from typing import Any
+
+from conftest import mic_browser  # type: ignore[import-not-found]
+from support.audio import clip, compose, silence
+from support.fakes import FailingWire, delayed_wire
+from support.server import running_demo_app
+
+from riva.demo.fakes import EchoTurnLLM
+from riva.demo.providers import Providers
+from riva.demo.text import ENGLISH_ONLY, words
+from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+
+LISTENING = "window.rivaVad && (window.rivaVad.stages || []).includes('listening')"
+PHASE_RECORDER = """
+window.__phases = [];
+const recordPhase = () => {
+  const box = document.getElementById('riva-status');
+  if (box && window.__phases[window.__phases.length - 1] !== box.dataset.phase)
+    window.__phases.push(box.dataset.phase);
+};
+new MutationObserver(recordPhase).observe(document, {
+  subtree: true, childList: true, attributes: true, attributeFilter: ['data-phase']});
+"""
+
+
+class SlowEcho(EchoTurnLLM):
+    delay = 1.2
+
+    def respond(self, *args: Any, **kwargs: Any) -> Any:
+        time.sleep(self.delay)
+        return super().respond(*args, **kwargs)
+
+
+class SlowTone(SyntheticReplyProvider):
+    """Synthetic speech that needs a moment before its first audio and lasts several seconds."""
+
+    seconds = 4
+
+    def speech(self, phrase: str, config: Any) -> Any:
+        time.sleep(0.8)
+        for _ in range(self.seconds):
+            yield from super().speech(phrase, config)
+
+
+def providers(wire: Any = SyntheticWire, llm: Any = None, speech: Any = None) -> Providers:
+    return Providers(llm or SlowEcho(), speech or SlowTone(), wire)
+
+
+def is_subsequence(wanted: list[str], seen: list[str]) -> bool:
+    it = iter(seen)
+    return all(item in it for item in wanted)
+
+
+def load(context: Any, url: str) -> Any:
+    page = context.new_page()
+    page.add_init_script(PHASE_RECORDER)
+    page.goto(url)
+    return page
+
+
+def test_page_is_german_with_only_simple_visible_controls(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        assert page.evaluate("document.documentElement.lang") == "de"
+        assert page.title() == "Mein Tagebuch"
+        visible = page.evaluate("document.body.innerText")
+        for expected in ("Mein Tagebuch", "▶ Start", "⏹ Stopp", "Das habe ich gehört"):
+            assert expected in visible
+        assert not [w for w in words(visible) if w.casefold() in ENGLISH_ONLY], visible
+        for forbidden in ("Gradio", "API", "Settings", "Einstellungen", "Submit", "Error"):
+            assert forbidden not in visible
+        # No technical control is visible to the participant: only the two big buttons, the tabs
+        # and the closed technical spoiler.
+        buttons = [b for b in page.query_selector_all("button") if b.is_visible()]
+        names = sorted(b.inner_text().split("\n")[0].strip() for b in buttons)
+        assert "▶ Start" in names and "⏹ Stopp" in names
+        assert not [
+            n
+            for n in names
+            if n
+            not in {
+                "▶ Start",
+                "⏹ Stopp",
+                "Mein Tagebuch",
+                "Das habe ich gehört",
+                "Für Vorführende: Technik",
+            }
+        ], names
+        for kind in ("checkbox", "range", "radio", "file"):
+            assert not [e for e in page.query_selector_all(f"input[type={kind}]") if e.is_visible()]
+        assert (
+            page.query_selector("footer") is None or not page.query_selector("footer").is_visible()
+        )
+        assert page.query_selector("[data-phase='idle']") is not None
+        assert "Drücke auf Start." in page.inner_text("#riva-status")
+
+
+def start_listening(page: Any) -> None:
+    page.get_by_role("button", name="▶ Start").click()
+    page.wait_for_function(LISTENING, timeout=90_000)
+
+
+def conversation_wav(tmp_path: Path, tail: float = 14.0) -> Path:
+    return compose(tmp_path / "mic.wav", silence(1.0), clip("zoo"), silence(tail))
+
+
+def test_every_phase_is_shown_in_order_and_the_journal_fills(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers(delayed_wire(1.5))) as app,
+        mic_browser(playwright_instance, conversation_wav(tmp_path)) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").click()
+        page.wait_for_function(
+            "window.__phases.includes('speaking') && window.__phases.at(-1) === 'listening'",
+            timeout=90_000,
+        )
+        phases = page.evaluate("window.__phases")
+        wanted = ["idle", "starting", "listening", "hearing", "transcribing", "thinking",
+                  "preparing", "speaking", "listening"]  # fmt: skip
+        assert is_subsequence(wanted, phases), phases
+        assert (
+            page.get_by_role("tab", name="Mein Tagebuch").get_attribute("aria-selected") == "true"
+        )
+        assert page.input_value("#riva-journal textarea") == "Synthetischer Testlauf."
+        page.get_by_role("tab", name="Das habe ich gehört").click()
+        assert page.input_value("#riva-heard textarea") == "Synthetischer Testlauf."
+        assert page.input_value("#riva-reply textarea").endswith("?")
+
+
+def test_stopp_ends_the_spoken_reply_at_once(tmp_path: Path, playwright_instance: Any) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance, conversation_wav(tmp_path)) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").click()
+        page.wait_for_function("window.__phases.includes('speaking')", timeout=90_000)
+        page.get_by_role("button", name="⏹ Stopp").click()
+        page.wait_for_function("window.__phases.at(-1) === 'listening'", timeout=10_000)
+        assert page.evaluate("window.rivaPlayerStats.counts.stopped_by_user") >= 1
+        assert not page.evaluate("window.rivaIsPlaying()")
+        (session,) = [s for s in app.runtime.sessions.values() if not s.closed]
+        assert session.last_reply_heard is False
+        (run,) = app.runtime.replies.runs.values()
+        assert run.status == "cancelled"
+
+
+def test_a_reset_by_the_presenter_ends_the_session_and_the_page_starts_a_new_one(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        page.wait_for_function("window.rivaServerPhase !== undefined")
+        deadline = time.monotonic() + 10
+        while not app.runtime.sessions and time.monotonic() < deadline:
+            time.sleep(0.05)
+        (first,) = app.runtime.sessions.values()
+        first.close("presenter")
+        page.wait_for_function(
+            "document.getElementById('riva-status')?.dataset.phase === 'closed'", timeout=10_000
+        )
+        assert "Diese Sitzung ist zu Ende" in page.inner_text("#riva-status")
+        # The page reloads itself and gets a brand new session.
+        page.wait_for_function(
+            "document.getElementById('riva-status')?.dataset.phase === 'idle'", timeout=20_000
+        )
+        deadline = time.monotonic() + 10
+        fresh: list[Any] = []
+        while not fresh and time.monotonic() < deadline:
+            fresh = [s for s in app.runtime.sessions.values() if not s.closed]
+            time.sleep(0.05)
+        assert len(fresh) == 1 and fresh[0].identity.session_id != first.identity.session_id
+        assert fresh[0].journal.passages == []
+
+
+def test_a_failing_speech_recognizer_shows_a_friendly_message_and_recovers(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers(FailingWire)) as app,
+        mic_browser(playwright_instance, conversation_wav(tmp_path, 12.0)) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").click()
+        page.wait_for_function("window.__phases.includes('error')", timeout=90_000)
+        text = page.inner_text("body")
+        assert "Da ist etwas schiefgelaufen" in text and "sensitive" not in text
+        page.wait_for_function("window.__phases.at(-1) === 'listening'", timeout=30_000)
+
+
+def test_a_failing_language_model_still_keeps_the_participants_words(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    class Broken:
+        def respond(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("secret provider detail")
+
+    with (
+        running_demo_app(tmp_path, providers(llm=Broken())) as app,
+        mic_browser(playwright_instance, conversation_wav(tmp_path)) as context,
+    ):
+        page = load(context, app.url)
+        start_listening(page)
+        page.wait_for_function(
+            "document.querySelector('#riva-journal textarea').value.length > 0", timeout=60_000
+        )
+        assert page.input_value("#riva-journal textarea") == "Synthetischer Testlauf."
+        assert "nicht ganz verstanden" in page.input_value("#riva-reply textarea")
+        assert "secret" not in page.inner_text("body")
+        (session,) = [s for s in app.runtime.sessions.values() if not s.closed]
+        assert session.journal.passages[0].source == "verbatim_fallback"
+
+
+def test_keyboard_users_can_reach_and_operate_the_buttons_with_visible_focus(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        order: list[str] = []
+        for _ in range(8):
+            page.keyboard.press("Tab")
+            order.append(page.evaluate("document.activeElement.innerText || ''").strip())
+            if "⏹ Stopp" in order:
+                break
+        assert "▶ Start" in order and "⏹ Stopp" in order
+        assert order.index("▶ Start") < order.index("⏹ Stopp")
+        outline = page.evaluate("parseFloat(getComputedStyle(document.activeElement).outlineWidth)")
+        assert outline >= 3, "keyboard focus must be clearly visible"
+        page.focus("button#riva-start")
+        page.keyboard.press("Enter")
+        page.wait_for_function(LISTENING, timeout=90_000)
+
+
+def test_automated_accessibility_check_finds_no_serious_problems(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    axe = Path("~/.cache/riva-browser-test-assets/axe-core@4.10.2/axe.min.js").expanduser()
+    if not axe.exists():
+        import pytest
+
+        pytest.skip("axe-core missing; run: uv run python scripts/fetch_browser_test_assets.py")
+    with (
+        running_demo_app(tmp_path, providers()) as app,
+        mic_browser(playwright_instance) as context,
+    ):
+        page = load(context, app.url)
+        page.get_by_role("button", name="▶ Start").wait_for()
+        page.add_script_tag(path=str(axe))
+        result = page.evaluate(
+            "axe.run(document, {runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']}})"
+        )
+        serious = [
+            (v["id"], v["impact"], [n["target"] for n in v["nodes"]][:3])
+            for v in result["violations"]
+            if v["impact"] in ("serious", "critical")
+        ]
+        assert serious == [], serious

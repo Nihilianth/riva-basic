@@ -91,6 +91,18 @@ suspends and drops it and a new reply follows.
 - **Player assertions** use `window.rivaPlayerStats` (stage counters, scheduled chunks, context state), since
   headless Chromium has no audible output.
 
+## Participant page tests (`tests/demo/browser/test_participant_ui.py`)
+
+Real demo page, real VAD with the fake microphone, deterministic slow providers so each phase is visible:
+German-only visible text and `lang="de"`; no technical control on the page (only Start, Stopp, tabs and the
+closed spoiler; no checkbox/slider/file inputs; no Gradio footer); every status phase appears in order
+(idle, starting, listening, hearing, transcribing, thinking, preparing, speaking, listening); the journal and
+"heard" tabs fill; Stopp ends speech at once; a presenter reset closes the session and the page reloads into
+a new one; a failing ASR shows the friendly error and recovers; a failing LLM keeps the participant's words
+(verbatim fallback, no provider text shown); keyboard Tab order reaches Start then Stopp with a visible
+focus outline and Enter starts; **axe-core** (WCAG 2 A/AA, cached by `fetch_browser_test_assets.py`) reports
+no serious or critical violation. Contrast fixes found by axe are in `riva.demo.ui.CSS`.
+
 ## Embedded JavaScript
 
 The page scripts live in Python strings (`VAD_BROWSER_JS`, `PLAYBACK_JS`).

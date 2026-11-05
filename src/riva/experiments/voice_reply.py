@@ -479,6 +479,10 @@ if (!window.rivaPlaybackInstalled) {
     current.suspended = true;
     ctx.suspend().then(() => note('suspended_user_speaking')).catch(() => {});
   };
+  // For the participant page: is a reply audibly playing, and the Stopp button.
+  window.rivaIsPlaying = () =>
+    Boolean(current && ctx && ctx.state === 'running' && current.sources.size > 0);
+  window.rivaStopSpeech = () => { stopCurrent('stopped_by_user'); };
   window.rivaDropReplyAudio = () => {  // a real speech segment ended: the old reply is stale
     const wasSuspended = Boolean(current && current.suspended);
     stopCurrent('dropped_stale_reply');
@@ -503,7 +507,15 @@ if (!window.rivaPlaybackInstalled) {
 """
 
 
-def build_voice_api(demo: gr.Blocks, replies: ReplyManager) -> FastAPI:
+def build_voice_api(
+    demo: gr.Blocks,
+    replies: ReplyManager,
+    *,
+    css: str | None = None,
+    head: str | None = None,
+    extra_js: str = "",
+    footer_links: list[str] | None = None,
+) -> FastAPI:
     """The FastAPI app: the Gradio page plus the playback, reply-audio and diagnostics routes."""
     from gradio.routes import mount_gradio_app
 
@@ -583,7 +595,10 @@ def build_voice_api(demo: gr.Blocks, replies: ReplyManager) -> FastAPI:
         demo,
         path="/",
         app_kwargs={},
-        js=PLAYBACK_JS,
+        js=PLAYBACK_JS + extra_js,
+        css=css,
+        head=head,
+        footer_links=footer_links,
         max_file_size="30mb",
         show_error=False,
     )

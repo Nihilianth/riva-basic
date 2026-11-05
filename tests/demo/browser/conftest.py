@@ -84,18 +84,19 @@ def serve_vad_assets(context: Any) -> None:
 
 
 @contextmanager
-def mic_browser(playwright: Any, wav: Path) -> Iterator[Any]:
-    """Chromium whose fake microphone plays ``wav`` once (starting when capture opens)."""
-    browser = playwright.chromium.launch(
-        headless=True,
-        env=chromium_env(),
-        args=[
-            "--use-fake-device-for-media-stream",
-            "--use-fake-ui-for-media-stream",
-            f"--use-file-for-fake-audio-capture={wav}%noloop",
-            "--autoplay-policy=no-user-gesture-required",
-        ],
-    )
+def mic_browser(playwright: Any, wav: Path | None = None) -> Iterator[Any]:
+    """A browser context with cached VAD assets; the fake microphone plays ``wav`` once.
+
+    Without ``wav`` the microphone stays silent, which is enough for pages that never listen.
+    """
+    args = [
+        "--use-fake-device-for-media-stream",
+        "--use-fake-ui-for-media-stream",
+        "--autoplay-policy=no-user-gesture-required",
+    ]
+    if wav is not None:
+        args.append(f"--use-file-for-fake-audio-capture={wav}%noloop")
+    browser = playwright.chromium.launch(headless=True, env=chromium_env(), args=args)
     context = browser.new_context(permissions=["microphone"])
     serve_vad_assets(context)
     try:
