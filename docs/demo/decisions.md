@@ -71,3 +71,12 @@ Results are in the private archive (`research-data/demo-1/live-eval/`), not in G
   turn is not uncertain and has no `low_grounding` flag**; otherwise the journal stays unchanged and the reply
   becomes a clarification (the model's reply if it already contains a question, else a fixed German one).
   Implemented with the journal (riva-skm.6) and covered by tests; the prompt also gets a worked example.
+
+## Revisions stay conservative (2026-11-05, requirement from the user)
+- An ambiguous or doubtful correction never edits a passage. The original passage text is never lost: every
+  revision stores the previous text, the turn, **the utterance id and the participant's utterance** that
+  caused it (`Revision`), also in the archive's journal snapshots. A blocked correction is logged as
+  `revise_blocked` and the triggering utterance stays in `utterances/<id>.json` with the reason.
+- `low_grounding` (word overlap between a proposed text and what was said) is a **warning heuristic**, not a
+  semantic correctness check: it can be wrong in both directions. It is only used to make the journal more
+  cautious (block a revision, mark a passage uncertain), never to accept something as correct.

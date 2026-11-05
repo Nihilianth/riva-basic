@@ -208,6 +208,13 @@ def test_a_doubtful_correction_is_answered_with_a_clarification(tmp_path) -> Non
     report = h.answer("Nein, es waren vier.")
     assert report.change.kind == "unchanged" and "?" in report.reply_text
     assert h.session.journal.passages[0].text == original
+    assert "revise_blocked" in h.names()
+    # the utterance that asked for the change is preserved in the archive
+    record = json.loads(
+        (h.archive.directory / "utterances" / f"{report.utterance_id}.json").read_text()
+    )
+    assert record["merged_transcript"] == "Nein, es waren vier."
+    assert record["journal_change"]["reason"] == "revise_blocked_uncertain"
 
 
 @pytest.mark.parametrize(
@@ -235,3 +242,23 @@ def test_every_persona_and_model_combination_makes_a_valid_session(tmp_path) -> 
             assert h.answer("Hallo") is not None
             assert persona.prompt in str(h.llm.calls[0]["instructions"])
             assert h.llm.calls[0]["model"] == model.id
+
+
+def test_a_revision_is_recorded_with_its_utterance_in_the_journal_snapshot(tmp_path) -> None:
+    first = turn_json(
+        journal_op={"type": "append", "text": "Ich habe zwei Elefanten gesehen.",
+                    "target_id": None, "evidence": None}
+    )  # fmt: skip
+    fix = turn_json(
+        journal_op={"type": "revise", "text": "Ich habe drei Elefanten gesehen.",
+                    "target_id": "p0", "evidence": "es waren drei"}
+    )  # fmt: skip
+    h = make_harness(tmp_path, [first, fix])
+    h.synth.release.set()
+    h.answer("Ich habe zwei Elefanten gesehen.")
+    report = h.answer("Nein, es waren drei Elefanten.")
+    assert report.change.kind == "revised" and "passage_revised" in h.names()
+    passage = json.loads((h.archive.directory / "journal" / "0002.json").read_text())["passages"][0]
+    assert passage["text"] == "Ich habe drei Elefanten gesehen."
+    assert passage["revisions"][0]["previous_text"] == "Ich habe zwei Elefanten gesehen."
+    assert passage["revisions"][0]["utterance_text"] == "Nein, es waren drei Elefanten."

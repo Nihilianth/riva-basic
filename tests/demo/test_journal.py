@@ -164,3 +164,29 @@ def test_fixture_scenarios_produce_the_expected_journal(scenario) -> None:
         assert "drei" in final and "zwei" not in final
     if scenario.name == "ambiguous-correction":
         assert "Elefanten und Löwen" in final and len(journal.passages) == 1
+
+
+def test_a_revision_keeps_the_original_text_and_the_utterance_that_caused_it() -> None:
+    journal = Journal()
+    journal.apply(outcome_for("Ich habe zwei Elefanten gesehen.", journal,
+                              append_json("Ich habe zwei Elefanten gesehen.")), "t0", "u0",
+                  "Ich habe zwei Elefanten gesehen.")  # fmt: skip
+    fix = revise_json("p0", "Ich habe drei Elefanten gesehen.", "es waren drei Elefanten")
+    spoken = "Nein, es waren drei Elefanten."
+    journal.apply(outcome_for(spoken, journal, fix), "t1", "u1", spoken)
+    (revision,) = journal.passages[0].revisions
+    assert (revision.previous_text, revision.utterance_id, revision.utterance_text) == (
+        "Ich habe zwei Elefanten gesehen.", "u1", spoken)  # fmt: skip
+    snapshot = journal.snapshot()[0]["revisions"][0]
+    assert snapshot["utterance_text"] == spoken and snapshot["utterance_id"] == "u1"
+    assert journal.passages[0].text == "Ich habe drei Elefanten gesehen."
+
+
+def test_a_blocked_correction_changes_nothing_in_any_passage() -> None:
+    journal = Journal()
+    for i, text in enumerate(["Ich war im Zoo.", "Ich habe Löwen gesehen."]):
+        journal.apply(outcome_for(text, journal, append_json(text)), f"t{i}", f"u{i}", text)
+    before = journal.snapshot()
+    unsure = revise_json("p1", "Ich habe vier Löwen gesehen.", "es waren vier", uncertain=True)
+    change = journal.apply(outcome_for("Nein, es waren vier.", journal, unsure), "t2", "u2", "x")
+    assert change.kind == "unchanged" and journal.snapshot() == before

@@ -262,7 +262,7 @@ class DemoSession:
         client_started_ms: float,
     ) -> TurnReport:
         """Apply the turn. Caller holds the lock and has passed the commit gate."""
-        change = self.journal.apply(outcome, saved.metadata.turn_id)
+        change = self.journal.apply(outcome, saved.metadata.turn_id, utterance_id, merged_text)
         reply_text = change.reply_override or outcome.spoken_reply
         self.last_reply_text = reply_text
         self.history.append((merged_text, reply_text))
@@ -309,6 +309,13 @@ class DemoSession:
             passage=change.passage_id,
             journal=journal_path,
         )
+        if change.reason.startswith("revise_"):
+            # A doubtful correction left the journal untouched; the utterance is in the archive.
+            self.archive.event(
+                "revise_blocked", utterance=utterance_id, reason=change.reason, passage=None
+            )
+        if change.kind == "revised":
+            self.archive.event("passage_revised", utterance=utterance_id, passage=change.passage_id)
         if "possible_distress" in outcome.flags:
             self.archive.event("presenter_alert", utterance=utterance_id, kind="possible_distress")
         run: ReplyRun | None = None

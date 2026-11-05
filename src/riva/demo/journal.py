@@ -1,5 +1,10 @@
 """The cumulative journal: append-only passages, controlled revisions, full history kept.
 
+Conservative by design: an ambiguous or doubtful correction never edits a passage. The
+``low_grounding`` flag that blocks a revision is a WARNING heuristic (word overlap between the new
+text and what was said), not a check that a correction is semantically right; it can be wrong in
+both directions, which is why it only ever makes the journal MORE cautious.
+
 The LLM only ever writes the passage for the current utterance (``append``) or, on an explicit and
 unambiguous user correction, a new text for one of the last few passages (``revise``). The app
 applies these deterministically; nothing else in the journal can change.
@@ -15,9 +20,13 @@ CLARIFY_REPLY = "Welchen Teil meinst du? Sag mir bitte noch einmal, was ich änd
 
 @dataclass
 class Revision:
+    """One change to a passage. The original text and the utterance that caused it are kept."""
+
     previous_text: str
     turn_id: str
     reason: str
+    utterance_id: str = ""
+    utterance_text: str = ""  # what the participant said (merged ASR text) - content, private
 
 
 @dataclass
@@ -37,7 +46,13 @@ class Passage:
             "source": self.source,
             "uncertain": self.uncertain,
             "revisions": [
-                {"previous_text": r.previous_text, "turn_id": r.turn_id, "reason": r.reason}
+                {
+                    "previous_text": r.previous_text,
+                    "turn_id": r.turn_id,
+                    "reason": r.reason,
+                    "utterance_id": r.utterance_id,
+                    "utterance_text": r.utterance_text,
+                }
                 for r in self.revisions
             ],
         }
@@ -80,7 +95,13 @@ class Journal:
         self.passages.append(passage)
         return passage
 
-    def apply(self, outcome: TurnOutcome, turn_id: str) -> JournalChange:
+    def apply(
+        self,
+        outcome: TurnOutcome,
+        turn_id: str,
+        utterance_id: str = "",
+        utterance_text: str = "",
+    ) -> JournalChange:
         op = outcome.journal_op
         if outcome.source == "fallback":
             passage = self._append(op.text, turn_id, "verbatim_fallback", True)
@@ -90,9 +111,11 @@ class Journal:
             return JournalChange("appended", passage.id)
         if op.type == "none":
             return JournalChange("unchanged", reason="no_change")
-        return self._revise(outcome, turn_id)
+        return self._revise(outcome, turn_id, utterance_id, utterance_text)
 
-    def _revise(self, outcome: TurnOutcome, turn_id: str) -> JournalChange:
+    def _revise(
+        self, outcome: TurnOutcome, turn_id: str, utterance_id: str, utterance_text: str
+    ) -> JournalChange:
         op = outcome.journal_op
         target = next((p for p in self.passages[-self.window :] if p.id == op.target_id), None)
         soft = outcome.validated.soft_flags if outcome.validated else ()
@@ -104,6 +127,8 @@ class Journal:
                 reason="revise_blocked_uncertain" if target else "revise_target_missing",
                 reply_override=None if "?" in reply else CLARIFY_REPLY,
             )
-        target.revisions.append(Revision(target.text, turn_id, "user_correction"))
+        target.revisions.append(
+            Revision(target.text, turn_id, "user_correction", utterance_id, utterance_text)
+        )
         target.text = op.text.strip()
         return JournalChange("revised", target.id, target.revisions[-1].previous_text)
