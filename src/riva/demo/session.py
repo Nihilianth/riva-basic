@@ -122,10 +122,19 @@ class DemoSession:
     def _discard(self, stage: str, **fields: Any) -> None:
         self.archive.event("stale_discarded", stage=stage, **fields)
 
-    def set_phase(self, phase: str) -> None:
+    def set_phase(self, phase: str, token: "EpochToken | None" = None) -> None:
+        """Change what the indicator shows. With a token, a stale caller (a stage that was
+        stopped or reset meanwhile) cannot overwrite the current state."""
         with self.lock:
-            if not self.closed:
-                self.phase = phase
+            if self.closed or (token is not None and token.epoch != self.epoch):
+                return
+            self.phase = phase
+
+    def resume(self) -> None:
+        """The participant pressed Start again after a Stopp: listening state, nothing else."""
+        with self.lock:
+            if not self.closed and self.phase == "stopped":
+                self.phase = "listening"
 
     def show_error(self, code: str, seconds: float = 6.0) -> None:
         """Show the friendly German error state for a while; ``code`` is a fixed identifier."""
@@ -151,6 +160,16 @@ class DemoSession:
                 "stop_seq": str(self.stop_seq),
             }
 
+    def _await_previous_turn(self, timeout: float = 10.0) -> None:
+        """After a Stopp the interrupted utterance's ASR still finishes and is saved (audit trail);
+        a new utterance waits for that instead of being rejected as "previous turn not saved"."""
+        deadline = self.monotonic() + timeout
+        while self.monotonic() < deadline:
+            turn = self.asr.turns.get(self.identity.session_id)
+            if turn is None or turn.persisted:
+                return
+            time.sleep(0.05)
+
     # --- ASR --------------------------------------------------------------------------------
 
     def segment_updates(
@@ -158,6 +177,7 @@ class DemoSession:
     ) -> Generator[SegmentProgress, None, SegmentOutcome | None]:
         """Run the shared segment pipeline; returns the outcome only if the session is current."""
         timeline = SegmentTimeline(self.asr, self.identity)
+        self._await_previous_turn()
         try:
             outcome = yield from process_segment(payload, self.identity, self.asr, timeline)
         except KeyError:  # the ASR turn was released by a reset while we were waiting
@@ -193,11 +213,16 @@ class DemoSession:
         if outcome.result.status != "completed" or not text:
             self.archive.event("segment_unusable", segment=segment_id, asr=outcome.result.status)
             return "unusable"
+        if not self.is_current(token):
+            self._discard("before_gate", segment=segment_id)
+            return None
         decision = gate_transcript(
             self.asr, self.identity, text, outcome.segment_end_ms, outcome.saved
         )
         with self.lock:
             if self.closed or token.epoch != self.epoch:
+                # Stopped or reset while the gate ran: whatever it held must not reach a later turn.
+                self.asr.take_held(self.identity)
                 self._discard("before_gate", segment=segment_id)
                 return None
             if decision.hold:
@@ -368,41 +393,55 @@ class DemoSession:
                       "voice": settings.voice, "tts_model": self.config.tts_model}
         )  # fmt: skip
 
-    def stop_speech(self) -> bool:
-        """The participant pressed Stopp: end the reply now and remember it was not fully heard."""
+    def interrupt(self, reason: str = "stopped") -> bool:
+        """Stopp: end the current interaction wherever it is, without closing the session.
+
+        It reuses the epoch/commit gate: bumping the epoch makes every result of a stage that is
+        still running (ASR, LLM call, TTS start) stale, so it is discarded and audited instead of
+        being applied. Held fragments are dropped, a reply being synthesized or played is cancelled
+        (and serves no more audio). Journal entries that were already committed stay.
+        """
         with self.lock:
-            self.stop_seq += 1
-            run = self.last_run
-            if self.closed or run is None:
+            if self.closed:
                 return False
-        stopped = self.replies.stop(self.identity)
-        if stopped is None:
-            return False
-        with self.lock:
-            self.last_reply_heard = False
+            self.epoch += 1
+            self.stop_seq += 1
+            self._pending.clear()
+            self.phase = "stopped"
+            run = self.last_run
+            if run is not None:
+                self._mark_unheard_if_audible(run)
+        self.asr.take_held(self.identity)
+        stopped = self.replies.stop(self.identity) if run is not None else None
         self.archive.event(
-            "speech_stopped",
-            generation=stopped.generation_id,
-            heard_ms=stopped.snapshot().get("playback_duration_ms"),
+            "interrupted",
+            reason=reason,
+            generation=stopped.generation_id if stopped else None,
+            heard_ms=stopped.snapshot().get("playback_duration_ms") if stopped else None,
         )
         return True
+
+    def _mark_unheard_if_audible(self, run: ReplyRun) -> None:
+        """Caller holds the lock. A reply still being produced or still playing counts as not fully
+        heard, so an unheard follow-up question may be asked again; an old one counts as heard."""
+        if self.last_reply_heard is not None:
+            return
+        snapshot = run.snapshot()
+        audio_s = float(snapshot.get("audio_seconds_produced") or 0)  # type: ignore[arg-type]
+        playing_until = run.started + (run.first_audio_ms or 0) / 1000 + audio_s
+        audible = run.status in ("generating", "cancelled") or self.monotonic() < playing_until
+        self.last_reply_heard = not audible
+        if audible:
+            self.archive.event("reply_interrupted", generation=run.generation_id)
 
     def note_user_speech_started(self) -> None:
         """Barge-in: if the user starts speaking while the reply should still be playing, the last
         reply counts as not fully heard (so an unheard follow-up question may be asked again)."""
         with self.lock:
             run = self.last_run
-            if self.closed or run is None or self.last_reply_heard is not None:
+            if self.closed or run is None:
                 return
-            snapshot = run.snapshot()
-            audio_s = float(snapshot.get("audio_seconds_produced") or 0)  # type: ignore[arg-type]
-            first_audio = (run.first_audio_ms or 0) / 1000
-            playing_until = run.started + first_audio + audio_s
-            if run.status == "cancelled" or self.monotonic() < playing_until:
-                self.last_reply_heard = False
-                self.archive.event("reply_interrupted", generation=run.generation_id)
-            else:
-                self.last_reply_heard = True
+            self._mark_unheard_if_audible(run)
 
     # --- reset ------------------------------------------------------------------------------
 

@@ -92,7 +92,9 @@ def test_every_phase_is_shown_in_order_and_the_journal_fills(
         assert page.input_value("#riva-reply textarea").endswith("?")
 
 
-def test_stopp_ends_the_spoken_reply_at_once(tmp_path: Path, playwright_instance: Any) -> None:
+def test_stopp_ends_the_spoken_reply_at_once_and_says_so(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
     with (
         running_demo_app(tmp_path, providers()) as app,
         mic_browser(playwright_instance, conversation_wav(tmp_path)) as context,
@@ -101,13 +103,18 @@ def test_stopp_ends_the_spoken_reply_at_once(tmp_path: Path, playwright_instance
         page.get_by_role("button", name="▶ Start").click()
         page.wait_for_function("window.__phases.includes('speaking')", timeout=90_000)
         page.get_by_role("button", name="⏹ Stopp").click()
-        page.wait_for_function("window.__phases.at(-1) === 'listening'", timeout=10_000)
+        page.wait_for_function("window.__phases.at(-1) === 'stopped'", timeout=10_000)
+        assert "Gestoppt." in page.inner_text("#riva-status")
         assert page.evaluate("window.rivaPlayerStats.counts.stopped_by_user") >= 1
         assert not page.evaluate("window.rivaIsPlaying()")
         (session,) = [s for s in app.runtime.sessions.values() if not s.closed]
+        deadline = time.monotonic() + 10  # the server handler runs a moment after the click
+        while session.last_reply_heard is not False and time.monotonic() < deadline:
+            time.sleep(0.05)
         assert session.last_reply_heard is False
         (run,) = app.runtime.replies.runs.values()
         assert run.status == "cancelled"
+        assert session.journal.passages[0].text == "Synthetischer Testlauf."  # kept
 
 
 def test_a_reset_by_the_presenter_ends_the_session_and_the_page_starts_a_new_one(

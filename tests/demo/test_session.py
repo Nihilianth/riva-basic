@@ -161,18 +161,18 @@ def test_close_is_idempotent_and_sessions_are_independent(tmp_path) -> None:
     assert json.loads((a.archive.directory / "session.json").read_text())["close_reason"] == "reset"
 
 
-def test_stop_speech_ends_the_reply_and_the_next_turn_knows_it_was_not_heard(tmp_path) -> None:
+def test_stopp_ends_the_reply_and_the_next_turn_knows_it_was_not_heard(tmp_path) -> None:
     h = make_harness(tmp_path)
     report = h.answer("Hallo")
     assert report is not None and h.synth.entered.wait(5)
-    assert h.session.stop_speech() is True
+    assert h.session.interrupt() is True
     assert report.run.status == "cancelled" and h.session.last_reply_heard is False
     h.synth.release.set()
     h.answer("Noch etwas.")
     assert "nicht ganz gehört" in str(h.llm.calls[1]["input"])
-    assert "speech_stopped" in h.names()
+    assert "interrupted" in h.names()
     h.session.close()
-    assert h.session.stop_speech() is False
+    assert h.session.interrupt() is False  # a closed session cannot be interrupted
 
 
 def test_barge_in_while_the_reply_should_still_play_counts_as_not_heard(tmp_path) -> None:
@@ -262,29 +262,3 @@ def test_a_revision_is_recorded_with_its_utterance_in_the_journal_snapshot(tmp_p
     assert passage["text"] == "Ich habe drei Elefanten gesehen."
     assert passage["revisions"][0]["previous_text"] == "Ich habe zwei Elefanten gesehen."
     assert passage["revisions"][0]["utterance_text"] == "Nein, es waren drei Elefanten."
-
-
-def test_stopp_while_the_model_is_still_thinking_does_not_cancel_the_coming_reply(tmp_path) -> None:
-    """Stopp acts on a reply that exists (synthesized or playing), not on one still to come."""
-    h = make_harness(tmp_path, gated_llm=True)
-    h.synth.release.set()
-    thread, box = run_in_thread(h.answer, "Hallo")
-    assert h.llm.entered.wait(5)
-    assert h.session.stop_speech() is False  # no reply yet: nothing to stop
-    assert h.session.stop_seq == 1  # the page is still told (it has nothing playing)
-    h.llm.release.set()
-    thread.join(5)
-    report = box["result"]
-    finish_run(report.run)
-    assert report.run.status == "completed" and h.session.last_reply_heard is None
-
-
-def test_stopp_after_the_reply_was_generated_still_stops_its_playback(tmp_path) -> None:
-    h = make_harness(tmp_path)
-    h.synth.release.set()
-    report = h.answer("Hallo")
-    finish_run(report.run)
-    assert report.run.status == "completed"  # fully generated; the browser may still be playing it
-    assert h.session.stop_speech() is True and report.run.status == "cancelled"
-    assert h.session.last_reply_heard is False and h.session.stop_seq == 1
-    assert h.session.journal.passages[0].text == "Ich war im Zoo."  # the journal entry is kept

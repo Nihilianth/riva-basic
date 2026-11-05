@@ -379,6 +379,8 @@ class ReplyRun:
         if offset < 0:
             raise ValueError("offset must be non-negative")
         with self.lock:
+            if self.status == "cancelled":
+                return b"", True  # stopped on purpose: audio produced earlier must not start now
             chunk = bytes(self.pcm[offset:])
             drained = offset + len(chunk) >= len(self.pcm)
         return chunk, drained and (self.done.is_set() or self.cancelled.is_set())

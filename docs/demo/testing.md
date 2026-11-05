@@ -144,13 +144,22 @@ change); any other finding fails the test. Once the tables have content the same
 This stricter scan also found (and we fixed) the low-contrast colors of Gradio's JSON viewer used for the
 timeline. Automated checks do not replace a manual keyboard/screen-reader pass.
 
-## Stopp, local-only and deletion tests
+## Stopp tests (riva-skm.21)
 
-`tests/demo/test_session.py` (Stopp while thinking does not cancel the coming reply; Stopp after generation
-still stops playback), `tests/demo/browser/test_demo_conversation.py` (Stopp during playback vs during recording:
-the microphone stays on and the whole second utterance is processed), `tests/demo/test_presenter.py` (loopback-only
-presenter, 403 for others, no `--host` option, bind address `127.0.0.1`), `tests/demo/test_delete_archive.py`
-(dry run, delete, open sessions, malformed ids, ambiguity, symlinks).
+`tests/demo/test_interrupt.py` (51 cases): Stopp with nothing running (repeatable, harmless); before the LLM call;
+during the LLM call (late answer dropped, journal unchanged, no reply, audited); during ASR (transcript dropped,
+recording kept, next utterance works); between ASR and the gate (nothing stays held); with fragments waiting;
+during TTS (late audio never plays, `/riva/reply_audio` serves nothing); during playback (no buffered audio);
+a stale result from before the Stopp cannot touch the next turn; **40 randomized races of Stopp against the
+commit**; audit trail and indicator state. `tests/demo/browser/test_stopp_stages.py`: the same stages with the
+real VAD and the fake microphone - recording (nothing submitted or saved), ASR, LLM, TTS preparation, playback
+(`test_participant_ui.py`), resuming with Start, and the processing acknowledgement.
+
+## Local-only and deletion tests
+
+`tests/demo/test_presenter.py` (loopback-only presenter, 403 for others, no `--host` option, bind address
+`127.0.0.1`), `tests/demo/test_delete_archive.py` (dry run, delete, open sessions, malformed ids, ambiguity,
+symlinks).
 
 ## Embedded JavaScript
 

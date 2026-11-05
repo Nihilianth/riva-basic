@@ -141,3 +141,12 @@ audio start; perceived delay is therefore roughly 9-12 s.
 - The accessibility exception is exactly one Gradio upstream element (`.empty`); everything else must be clean.
 - The demo is NOT declared presentation-ready: real microphone, speakers, echo and a manual usability pass with
   real hardware are the user's check (see the README checklist).
+
+## Stopp is one consistent interrupt (2026-11-05, user request)
+Supersedes the earlier "Stopp never stops recording / does not cancel ASR or LLM" limitation. Stopp now ends the
+current interaction in every state through the existing epoch/commit gate (no parallel cancellation mechanism):
+recording is discarded without submitting, ASR/LLM results become stale, TTS and playback are cancelled and serve
+no late audio, committed journal entries and the audit trail are kept, and the page says so in German
+("Gestoppt"). Start resumes. A processing acknowledgement (animated bar, and a note after 4 s) makes long waits
+understandable. Known TTS/ASR retirement dates stay in `docs/handoffs` and `riva-ddc` (Speech API shutdown
+2027-01-06).

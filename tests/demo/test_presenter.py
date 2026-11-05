@@ -106,6 +106,7 @@ def test_stop_all_stops_every_active_session_and_signals_the_pages(tmp_path) -> 
     assert (a.stop_seq, b.stop_seq) == (0, 0)
     assert rt.stop_all() == 2
     assert (a.stop_seq, b.stop_seq) == (1, 1) and a.view()["stop_seq"] == "1"
+    assert a.phase == b.phase == "stopped" and a.epoch == b.epoch == 1
     b.close()
     assert rt.stop_all() == 1  # closed sessions are skipped
 

@@ -62,14 +62,21 @@ Private outputs (recordings, transcripts, logs) go to `../private/`, never into 
 
 ## What the Stopp button does (verified by tests)
 
-| Moment | Effect of **⏹ Stopp** |
+**⏹ Stopp ends the current interaction, whatever it is doing.** The page says "✋ Gestoppt. Drücke auf Start,
+wenn es weitergehen soll." and waits for **▶ Start**, which resumes listening (no new permission needed).
+
+| Moment | What Stopp does |
 |---|---|
-| A reply is audible, or still being synthesized | The audio stops at once in the browser; the server cancels the reply and marks it "not fully heard", so the next turn may ask an unheard follow-up again. The journal entry is kept. The page returns to "Ich höre dir zu." |
-| The participant is speaking / being recorded | **Nothing is stopped.** Recording and listening continue, the utterance is processed normally and its reply is not affected. |
-| Transcribing or thinking (no reply exists yet) | Nothing to stop: Stopp does not cancel speech recognition or the language model, so the reply that is about to start will play. Press Stopp again when it starts. (Known limitation.) |
-| Always | Stopp never switches the microphone off and there is no "pause listening" button; the presenter can end the session. |
-Starting to speak while a reply plays also stops it (barge-in), independent of Stopp. **Alles anhalten** on the
-presenter page does the same as Stopp for every active session.
+| The participant is speaking / being recorded | The microphone is paused and the unfinished utterance is **discarded - never submitted**, never recognized, never saved. |
+| Speech is being recognized, or the language model is thinking | The result is **invalidated** (it arrives late and is dropped): it cannot change the journal or start a reply. The audio that was already received stays in the archive (audit trail). |
+| The voice is being prepared (TTS) | The reply is cancelled; **no audio ever starts**, not even audio the provider delivers late. |
+| The reply is audible | Playback stops at once; buffered or late audio is not played; the reply counts as "not fully heard", so an unheard follow-up question may be asked again. |
+| Always | Journal entries that were already written stay, and so does the archive (an `interrupted` event is added). Held fragments that were waiting for more speech are dropped. |
+It uses the same epoch/commit gate as the session reset: Stopp bumps the epoch without closing the session, so
+every stage that started before it is stale. Starting to speak while a reply plays also stops it (barge-in).
+**Alles anhalten** on the presenter page is the same Stopp for every active session.
+While waiting, the status shows an animated bar, and after 4 s the note "Das dauert einen Moment. Ich bin gleich
+so weit." (the bar stands still for people who prefer reduced motion).
 
 ## Keep the demo local-only
 
@@ -110,6 +117,10 @@ Automated tests cannot cover these; do them once on the real laptop, headset/spe
 6. Consent for recording, and retention/deletion of `../private/research-data/demo-1/`, are your responsibility.
 
 ## Known limits
+
+**Retirement deadline:** the OpenAI Speech API used for text-to-speech is announced to shut down on
+**2027-01-06** (`riva-ddc`); the TTS adapter must be migrated before then or the demo loses its voice.
+ASR latency: a proposal to remove ~2 s per turn is waiting for review (`docs/demo/asr-latency-proposal.md`).
 
 Experimental, not participant-ready. Not verified: real microphones and their processing, speaker echo, audible
 audio quality and gaps, atypical-speech ASR accuracy, browsers other than Chromium/Chrome, venue network. End-to-end

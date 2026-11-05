@@ -734,6 +734,28 @@ async (enabled) => {
     window.rivaVad.speechEvents.push({kind: kind, at: at});
     button.click();
   };
+  // Stopp (demo page): throw away the utterance being recorded and pause the microphone. The VAD
+  // may still report that segment while it pauses, so everything is ignored until Start again.
+  window.rivaVad.discardAndPause = () => {
+    const vad = window.rivaVad;
+    vad.discard = true;
+    vad.pending = [];
+    if (vad.speaking) fireSpeech("end", performance.now());
+    vad.speaking = false;
+    vad.speechStartMs = null;
+    vad.enabled = false;
+    vad.paused = true;
+    try { if (vad.instance) vad.instance.pause(); } catch (_) {}
+    stage("stopped");
+  };
+  if (enabled && window.rivaVad.paused && window.rivaVad.instance) {
+    window.rivaVad.discard = false;
+    window.rivaVad.paused = false;
+    window.rivaVad.enabled = true;
+    await window.rivaVad.instance.start();
+    stage("listening");
+    return;
+  }
   if (enabled && window.rivaVad.enabled && window.rivaVad.instance) {
     stage("already listening");
     return;
@@ -803,17 +825,23 @@ async (enabled) => {
       preSpeechPadMs: 300,
       minSpeechMs: 250,
       onSpeechStart: () => {
+        if (window.rivaVad.discard) return;
         window.rivaVad.speechStartMs = performance.now();
         window.rivaVad.speaking = true;
         if (window.rivaHoldReplyAudio) window.rivaHoldReplyAudio();
         stage("speech start");
       },
       onSpeechRealStart: () => {
+        if (window.rivaVad.discard) return;
         // Confirmed speech (not a misfire): the backend stops/holds replies for it.
         fireSpeech("start", window.rivaVad.speechStartMs || performance.now());
         stage("speech confirmed");
       },
       onSpeechEnd: (audio) => {
+        if (window.rivaVad.discard) {
+          stage("discarded");
+          return;
+        }
         window.rivaVad.speaking = false;
         const endedMs = performance.now();
         fireSpeech("end", endedMs);

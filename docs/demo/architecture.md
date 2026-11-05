@@ -126,3 +126,16 @@ presenter can prepare all previews after a cost confirmation, and the pre-flight
 `HOST = "127.0.0.1"` is the only bind address (no CLI option). An ASGI middleware additionally answers
 `/presenter*` (HTTP and WebSocket) with 403 unless the client address is loopback. It is defense in depth, not
 access control: behind a reverse proxy on the same machine every client looks like loopback.
+
+## Stopp = interrupt (`DemoSession.interrupt`, riva-skm.21)
+One mechanism, the session epoch/commit gate. `interrupt()` bumps the epoch **without closing** the session, so
+tokens captured by running stages (ASR `segment_updates`, `on_segment`, LLM `answer`) are stale: their results are
+discarded and audited (`stale_discarded`) instead of applied. It also clears held fragments, sets the phase
+`stopped`, cancels the current reply (`ReplyRun.status == "cancelled"`; `read_audio` then serves nothing, so
+buffered/late audio never reaches the player), marks it not fully heard and writes `interrupted`. The browser side
+(`rivaStopAll`): stop playback, `rivaVad.discardAndPause()` (ignore the VAD's own end-of-speech report, pause
+capture, tell the server speech ended) and show "Gestoppt"; Start resumes (`rivaVad.paused`) and `resume()` resets
+the server phase. A stage that was stopped never sets an error or the phase (`set_phase(..., token)`); a new
+utterance waits until the interrupted one is saved (`_await_previous_turn`), so the audio of the interrupted
+utterance is kept. Presenter "Alles anhalten" calls the same `interrupt()` and the page reacts to the `stop_seq`
+counter with the same `rivaStopAll`.

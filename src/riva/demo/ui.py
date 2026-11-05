@@ -42,6 +42,15 @@ h1 { font-size: 2.6rem !important; text-align: center; }
 }
 #riva-status-emoji { font-size: 5rem; line-height: 1; }
 #riva-status-text { font-size: 2.2rem; font-weight: 700; }
+#riva-working { display: none; height: 10px; margin-top: 0.6rem; border-radius: 5px;
+  background: linear-gradient(90deg, #a16207 0 30%, #fde68a 30% 100%); background-size: 200% 100%;
+  animation: riva-slide 1.4s linear infinite; }
+#riva-status[data-working="true"] + #riva-working { display: block; }
+@keyframes riva-slide { from { background-position: 0 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { #riva-working { animation: none; } }
+#riva-status-note { font-size: 1.3rem; min-height: 1.8rem; text-align: center; color: #374151;
+  margin: 0.4rem 0 0; }
+#riva-status[data-phase="stopped"] { background: #e5e7eb; border-color: #374151; }
 #riva-status[data-phase="hearing"] { background: #dbeafe; border-color: #1d4ed8; }
 #riva-status[data-phase="speaking"] { background: #dcfce7; border-color: #15803d; }
 #riva-status[data-phase="thinking"], #riva-status[data-phase="preparing"],
@@ -79,20 +88,23 @@ INTRO_HTML = (
 )
 
 STATUS_HTML = (
-    '<div id="riva-status" role="status" aria-live="polite" data-phase="idle">'
+    '<div id="riva-status" role="status" aria-live="polite" data-phase="idle" data-working="false">'
     '<span id="riva-status-emoji" aria-hidden="true">'
     + texts.PHASES["idle"][0]
     + '</span><span id="riva-status-text">'
     + texts.PHASES["idle"][1]
     + "</span></div>"
+    '<div id="riva-working" aria-hidden="true"></div>'
+    '<p id="riva-status-note" role="status" aria-live="polite"></p>'
 )
 
-# Start: remember the click (it also unlocks audio), then start the browser VAD (see asr_stream).
+# Start: remember the click (it also unlocks audio), clear a previous Stopp, then start or resume
+# the browser VAD (see asr_stream). The hidden inputs are returned unchanged for the Python handler.
 START_JS = (
-    "async (enabled) => { window.rivaDemoClicked = true; await ("
-    + VAD_BROWSER_JS.strip()
-    + ")(enabled); }"
+    "async (enabled, identity) => { window.rivaDemoClicked = true; window.rivaStopped = false;"
+    " await (" + VAD_BROWSER_JS.strip() + ")(enabled); return [enabled, identity]; }"
 )
+
 # Remember this page's session id and tell the server when the page goes away (reload/close), so
 # the old session is closed at once instead of lingering until it expires.
 SESSION_JS = """
@@ -110,8 +122,8 @@ SESSION_JS = """
 # Stopp (or "Alles anhalten" from the presenter) bumps a counter; a change stops the player at once.
 STOP_SEQ_JS = """
 (seq) => {
-  if (window.rivaStopSeq !== undefined && window.rivaStopSeq !== seq && window.rivaStopSpeech)
-    window.rivaStopSpeech();
+  if (window.rivaStopSeq !== undefined && window.rivaStopSeq !== seq && window.rivaStopAll)
+    window.rivaStopAll();
   window.rivaStopSeq = seq;
 }
 """
@@ -129,7 +141,7 @@ PREVIEW_JS = """
   };
 })();
 """
-STOP_JS = "(identity) => { if (window.rivaStopSpeech) window.rivaStopSpeech(); return [identity]; }"
+STOP_JS = "(identity) => { if (window.rivaStopAll) window.rivaStopAll(); return [identity]; }"
 
 # Computes the visible phase from the server phase plus what only the browser knows.
 INDICATOR_JS = """
@@ -137,6 +149,7 @@ INDICATOR_JS = """
   if (window.rivaIndicatorInstalled) return;
   window.rivaIndicatorInstalled = true;
   const PHASES = __PHASES__;
+  const WAIT_NOTE = __WAIT_NOTE__;
   window.rivaServerPhase = 'idle';
   let shown = '', closedSince = 0;
   const compute = () => {
@@ -146,6 +159,7 @@ INDICATOR_JS = """
     const last = stages[stages.length - 1] || '';
     if (server === 'closed') return 'closed';
     if (last.startsWith('FAILED')) return 'mic_blocked';
+    if (window.rivaStopped || server === 'stopped') return 'stopped';
     if (!window.rivaDemoClicked) return 'idle';
     if (!stages.includes('listening')) return 'starting';
     if (vad.speaking) return 'hearing';
@@ -153,6 +167,15 @@ INDICATOR_JS = """
     if (server === 'idle') return 'listening';
     return server;
   };
+  // Stopp: end whatever is happening, in the browser as well: playback, microphone capture and the
+  // utterance being recorded. The server is told separately (button handler / stop counter).
+  window.rivaStopAll = () => {
+    window.rivaStopped = true;
+    if (window.rivaStopSpeech) window.rivaStopSpeech();
+    if (window.rivaVad && window.rivaVad.discardAndPause) window.rivaVad.discardAndPause();
+  };
+  const WORKING = ['starting', 'transcribing', 'thinking', 'preparing'];
+  let phaseSince = Date.now();
   setInterval(() => {
     const phase = compute();
     const box = document.getElementById('riva-status');
@@ -161,15 +184,26 @@ INDICATOR_JS = """
       closedSince = closedSince || Date.now();
       if (Date.now() - closedSince > 2500) location.reload();
     }
-    if (phase === shown) return;
-    shown = phase;
-    const [emoji, text] = PHASES[phase] || PHASES.idle;
-    box.dataset.phase = phase;
-    document.getElementById('riva-status-emoji').textContent = emoji;
-    document.getElementById('riva-status-text').textContent = text;
+    const note = document.getElementById('riva-status-note');
+    if (phase !== shown) {
+      shown = phase;
+      phaseSince = Date.now();
+      const [emoji, text] = PHASES[phase] || PHASES.idle;
+      box.dataset.phase = phase;
+      box.dataset.working = WORKING.includes(phase) ? 'true' : 'false';
+      document.getElementById('riva-status-emoji').textContent = emoji;
+      document.getElementById('riva-status-text').textContent = text;
+      if (note) note.textContent = '';
+    }
+    // A long wait gets a calm explanation so nobody thinks the page froze.
+    if (note && WORKING.includes(phase) && Date.now() - phaseSince > 4000 && !note.textContent) {
+      note.textContent = WAIT_NOTE;
+    }
   }, 120);
 })();
-""".replace("__PHASES__", json.dumps(texts.PHASES, ensure_ascii=False))
+""".replace("__PHASES__", json.dumps(texts.PHASES, ensure_ascii=False)).replace(
+    "__WAIT_NOTE__", json.dumps(texts.WAIT_NOTE, ensure_ascii=False)
+)
 
 
 def _values(session: DemoSession, timeline: list[dict[str, Any]]) -> tuple[Any, ...]:
@@ -197,8 +231,8 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
 
     def vad_segment(payload: str, identity: SessionIdentity) -> Any:
         session = runtime.ensure(identity)
-        token = session.token()
-        session.set_phase("transcribing")
+        token = session.token()  # a Stopp or reset bumps the epoch: this token is then stale
+        session.set_phase("transcribing", token)
 
         def view() -> tuple[Any, ...]:
             return _values(session, asr.get_vad_diagnostics(identity))
@@ -213,26 +247,27 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             except StopIteration as stop:
                 outcome = stop.value
             if outcome is None:
-                if not session.closed:
+                if session.is_current(token):  # a stopped/reset stage is not an error
                     session.show_error("segment_not_processed")
                 yield view()
                 return
             result = session.on_segment(outcome, token)
             if result == "held":
-                session.set_phase("listening")
+                session.set_phase("listening", token)
             elif result == "unusable":
-                session.show_error("asr_unusable")
+                if session.is_current(token):
+                    session.show_error("asr_unusable")
             elif result is not None:
-                session.set_phase("preparing")
+                session.set_phase("preparing", token)
                 yield view()
                 if result.run is not None:
                     for _ in result.run.updates():
                         yield view()
-                    if result.run.status == "failed":
+                    if result.run.status == "failed" and session.is_current(token):
                         session.show_error("reply_failed")
-                    elif not session.closed and session.phase == "preparing":
-                        session.set_phase("listening")
-                else:
+                    elif session.phase == "preparing":
+                        session.set_phase("listening", token)
+                elif session.is_current(token):
                     session.show_error("reply_not_started")
             yield view()
         except Exception as error:  # fixed code only; the message may contain private text
@@ -262,9 +297,12 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         if voice in runtime.config.voices and not session.closed:
             session.update_settings(replace(session.settings, voice=voice))
 
+    def resume(enabled: bool, identity: SessionIdentity) -> None:
+        runtime.ensure(identity).resume()
+
     def stop(identity: SessionIdentity) -> tuple[Any, ...]:
         session = runtime.ensure(identity)
-        session.stop_speech()
+        session.interrupt("participant_stop")
         return _values(session, asr.get_vad_diagnostics(identity))
 
     app = gr.Blocks(title=texts.PAGE_TITLE, analytics_enabled=False)
@@ -315,7 +353,10 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         ticker = gr.Timer(0.3)
 
         outputs = [journal, heard, reply, timeline, phase_box, generation, session_box, stop_box]
-        start.click(None, inputs=[enabled], js=START_JS, queue=False, api_visibility="private")
+        start.click(
+            resume, inputs=[enabled, identity], outputs=[], js=START_JS, queue=False,
+            show_progress="hidden", api_visibility="private",
+        )  # fmt: skip
         stop_button.click(
             stop, inputs=[identity], outputs=outputs, js=STOP_JS, queue=False,
             show_progress="hidden", api_visibility="private",

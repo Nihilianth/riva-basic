@@ -69,3 +69,20 @@ class RecordingEcho(EchoTurnLLM):
 def demo_providers(llm: Any, wire: Any = SyntheticWire, seconds: int = 1) -> Providers:
     tone = type("Tone", (SlowTone,), {"seconds": seconds})()
     return Providers(llm, tone, wire)
+
+
+def slow_echo(delay: float) -> Any:
+    """An echo LLM that needs ``delay`` seconds, so a test can press Stopp while it is thinking."""
+    return type("SlowEchoN", (SlowEcho,), {"delay": delay})()
+
+
+def slow_tone(first_delay: float, seconds: int = 4) -> Any:
+    """Synthetic speech whose first audio takes ``first_delay`` s (a long "preparing" phase)."""
+
+    class Tone(SyntheticReplyProvider):
+        def speech(self, phrase: str, config: Any) -> Any:
+            time.sleep(first_delay)
+            for _ in range(seconds):
+                yield from super().speech(phrase, config)
+
+    return Tone()

@@ -12,6 +12,7 @@ INTRO_STEPS = (
 INTRO_NOTE = "Ich bin ein Computer-Programm, kein Mensch."
 VOICE_LABEL = "Stimme"
 VOICE_INFO = "Wähle eine Stimme. Du hörst einen kurzen Satz."
+WAIT_NOTE = "Das dauert einen Moment. Ich bin gleich so weit."
 START = "▶ Start"
 STOP = "⏹ Stopp"
 TAB_JOURNAL = "Mein Tagebuch"
@@ -36,6 +37,7 @@ PHASES: dict[str, tuple[str, str]] = {
     "thinking": ("🤔", "Ich denke nach …"),
     "preparing": ("⏳", "Ich bereite meine Antwort vor …"),
     "speaking": ("🔊", "Ich spreche."),
+    "stopped": ("✋", "Gestoppt. Drücke auf Start, wenn es weitergehen soll."),
     "error": ("⚠️", "Da ist etwas schiefgelaufen. Bitte sag es noch einmal."),
     "mic_blocked": ("🎤", "Das Mikrofon geht nicht. Bitte frag um Hilfe."),
     "closed": ("🔄", "Diese Sitzung ist zu Ende. Lade die Seite neu."),

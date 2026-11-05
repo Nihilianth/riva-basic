@@ -104,8 +104,8 @@ class DemoRuntime:
         return self.pause_ms
 
     def stop_all(self) -> int:
-        """ "Alles anhalten": end speech in every active session. Returns how many were stopped."""
-        return sum(1 for session in self.active() if session.stop_speech())
+        """Alles anhalten = Stopp for every active session; returns how many were stopped."""
+        return sum(1 for session in self.active() if session.interrupt("presenter_stop"))
 
     def get(self, session_id: str) -> DemoSession | None:
         with self.lock:

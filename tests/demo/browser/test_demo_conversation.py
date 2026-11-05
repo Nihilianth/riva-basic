@@ -4,7 +4,6 @@ Real VAD fed by the fake microphone; ASR, LLM and TTS are deterministic fakes.
 """
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -162,50 +161,3 @@ def test_the_private_archive_holds_the_conversation_and_the_log_stays_content_fr
         assert (root / saved["audio"]).is_file() and (root / saved["transcript"]).is_file()
     out = capsys.readouterr().out
     assert "Synthetischer Testlauf" not in out  # transcripts never reach the ordinary log
-
-
-def test_stopp_ends_playback_but_never_stops_listening_or_recording(
-    tmp_path: Path, playwright_instance: Any
-) -> None:
-    """Stopp #1 during playback, Stopp #2 while the participant is speaking (recording)."""
-    llm = RecordingEcho()
-    wav = compose(
-        tmp_path / "mic.wav",
-        silence(1.0), clip("zoo"), silence(14.0), clip("schwimmbad"), silence(10.0),
-    )  # fmt: skip
-    with (
-        running_demo_app(tmp_path, demo_providers(llm, seconds=5)) as app,
-        mic_browser(playwright_instance, wav) as context,
-    ):
-        page = load(context, app.url)
-        page.get_by_role("button", name="▶ Start").click()
-        # Playback: the reply is audible, Stopp silences it at once.
-        page.wait_for_function("window.__phases.includes('speaking')", timeout=90_000)
-        page.get_by_role("button", name="⏹ Stopp").click()
-        page.wait_for_function(
-            "(window.rivaPlayerStats.counts.stopped_by_user || 0) >= 1", timeout=10_000
-        )
-        assert not page.evaluate("window.rivaIsPlaying()")
-        # The microphone stays on: nothing about the capture changed.
-        stages = page.evaluate("window.rivaVad.stages")
-        assert not any(s.startswith("FAILED") for s in stages) and "listening" in stages
-        (session,) = app.runtime.active()
-        deadline = time.monotonic() + 10  # the server handler runs a moment after the click
-        while session.last_reply_heard is not False and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert session.last_reply_heard is False
-        # Recording: pressing Stopp while the participant speaks does not end the recording.
-        page.wait_for_function(
-            "document.getElementById('riva-status').dataset.phase === 'hearing'", timeout=60_000
-        )
-        page.get_by_role("button", name="⏹ Stopp").click()
-        page.wait_for_function(
-            "document.querySelector('#riva-journal textarea').value.split('\\n\\n').length === 2",
-            timeout=60_000,
-        )
-        assert len(llm.inputs) == 2 and "nicht ganz gehört" in llm.inputs[1]
-        assert (
-            session.verbatim == ["Synthetischer Testlauf."] * 2
-        )  # the whole 2nd utterance arrived
-        second = list(app.runtime.replies.runs.values())[-1]
-        assert second.status != "cancelled"  # Stopp in the middle of recording stops no later reply
