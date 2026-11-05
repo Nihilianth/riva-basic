@@ -6,6 +6,7 @@ is active, which would break later tests that call ``asyncio.run`` if it stayed 
 
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -52,3 +53,53 @@ def chromium(playwright_instance: Any) -> Iterator[Any]:
         )
     yield browser
     browser.close()
+
+
+ASSET_TYPES = {".js": "application/javascript", ".wasm": "application/wasm"}
+
+
+def _asset_root() -> Path:
+    return Path(
+        os.environ.get("RIVA_BROWSER_ASSETS", "~/.cache/riva-browser-test-assets")
+    ).expanduser()
+
+
+def serve_vad_assets(context: Any) -> None:
+    """Serve the pinned jsDelivr VAD/ONNX files from the local cache, so tests need no internet."""
+    root = _asset_root()
+    if not (root / "@ricky0123").is_dir():
+        pytest.skip("VAD assets missing; run: uv run python scripts/fetch_browser_test_assets.py")
+
+    def handle(route: Any) -> None:
+        local = root / route.request.url.split("/npm/", 1)[1].split("?", 1)[0]
+        if not local.is_file():
+            route.fulfill(status=404, body="not cached")
+            return
+        route.fulfill(
+            body=local.read_bytes(),
+            content_type=ASSET_TYPES.get(local.suffix, "application/octet-stream"),
+        )
+
+    context.route("https://cdn.jsdelivr.net/npm/**", handle)
+
+
+@contextmanager
+def mic_browser(playwright: Any, wav: Path) -> Iterator[Any]:
+    """Chromium whose fake microphone plays ``wav`` once (starting when capture opens)."""
+    browser = playwright.chromium.launch(
+        headless=True,
+        env=chromium_env(),
+        args=[
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            f"--use-file-for-fake-audio-capture={wav}%noloop",
+            "--autoplay-policy=no-user-gesture-required",
+        ],
+    )
+    context = browser.new_context(permissions=["microphone"])
+    serve_vad_assets(context)
+    try:
+        yield context
+    finally:
+        context.close()
+        browser.close()

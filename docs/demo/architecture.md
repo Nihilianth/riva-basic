@@ -13,3 +13,8 @@ See `docs/handoffs/2026-11-05-vad-pipeline.md`.
 `riva.experiments.voice_reply.build_voice_api(demo, replies)` returns the FastAPI app (Gradio page + playback,
 reply-audio and diagnostics routes). `PLAYBACK_JS` is the page script. Tests build the same app on an
 ephemeral port with fake providers.
+
+## Browser player diagnostics
+
+`PLAYBACK_JS` exposes read-only `window.rivaPlayerStats` (`counts` per stage, `chunks`, `ctx`) next to the
+stage line; browser tests and operators can read how the player behaved without audio output.

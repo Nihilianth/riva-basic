@@ -368,7 +368,11 @@ if (!window.rivaPlaybackInstalled) {
     }).catch(() => {});
   };
   window.rivaReport = report;
+  // Read-only counters for tests/diagnostics: how often each player stage happened.
+  const stats = window.rivaPlayerStats = {counts: {}, last: '', chunks: 0, ctx: 'none'};
   const note = (name) => {
+    stats.counts[name] = (stats.counts[name] || 0) + 1;
+    stats.last = name;
     if (window.rivaVadStage) window.rivaVadStage('audio ' + name);
     report('audio', name);
   };
@@ -383,7 +387,7 @@ if (!window.rivaPlaybackInstalled) {
     if (!ctx) {
       const Ctor = window.AudioContext || window.webkitAudioContext;
       try { ctx = new Ctor({sampleRate: RATE}); } catch (_) { ctx = new Ctor(); }
-      ctx.onstatechange = () => note('ctx_' + ctx.state);
+      ctx.onstatechange = () => { stats.ctx = ctx.state; note('ctx_' + ctx.state); };
       note('ctx_' + ctx.state);
     }
     return ctx;
@@ -416,6 +420,7 @@ if (!window.rivaPlaybackInstalled) {
     source.connect(ctx.destination);
     const when = Math.max(run.next, ctx.currentTime + 0.08);
     source.start(when);
+    stats.chunks += 1;
     run.next = when + buffer.duration;
     run.sources.add(source);
     source.onended = () => {

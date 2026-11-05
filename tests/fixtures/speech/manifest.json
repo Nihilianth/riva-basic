@@ -1,0 +1,27 @@
+{
+  "synthetic": true,
+  "language": "de",
+  "generated_at": "2026-11-05T00:58:43+00:00",
+  "tts_model": "gpt-4o-mini-tts",
+  "voice": "coral",
+  "clips": {
+    "zoo": {
+      "text": "Heute war ich im Zoo.",
+      "seconds": 1.84,
+      "bytes": 59076,
+      "sha256": "2f629ff2a301fcdd42f89020e5391f1bba2d6ffd24893928a95917e6052a5264"
+    },
+    "elefanten": {
+      "text": "Elefanten und einen ganz großen Löwen.",
+      "seconds": 3.66,
+      "bytes": 117148,
+      "sha256": "d8943cc9eddeb0af817b8488ef75dcd3fb9452b74c663dfb92002a299f4f4f56"
+    },
+    "schwimmbad": {
+      "text": "Gestern war ich mit meiner Schwester im Schwimmbad und danach haben wir ein Eis gegessen.",
+      "seconds": 5.1,
+      "bytes": 163374,
+      "sha256": "163c224b355000f470199511ff69c1ad22aac659504f7198e23b95d4b2f158df"
+    }
+  }
+}

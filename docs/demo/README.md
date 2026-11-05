@@ -9,7 +9,7 @@ journal entry and a short spoken follow-up. Participant page `/` (no technical c
 ## What exists now
 
 - Test harness (see `testing.md`): network guard, `browser` marker, optional `e2e` group, synthetic German
-  conversation fixtures.
+  conversation fixtures, and fake-microphone browser tests that run the real VAD against synthetic speech.
 - The experimental voice app it will reuse: `riva-voice-test` (see the top-level README and
   `docs/handoffs/2026-11-05-vad-pipeline.md`).
 
@@ -18,5 +18,7 @@ journal entry and a short spoken follow-up. Participant page `/` (no technical c
 ```sh
 uv sync --locked                                  # runtime + dev tools
 uv sync --locked --group e2e                      # optional: browser tests
+uv run --group e2e playwright install chromium    # once; see testing.md for libnss on WSL
+uv run python scripts/fetch_browser_test_assets.py  # once: cached VAD files (free)
 ```
 Private outputs (recordings, transcripts, logs) go to `../private/`, never into Git. Never read or commit `.env`.

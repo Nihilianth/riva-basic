@@ -1,0 +1,59 @@
+"""Run the real Gradio voice app with fake providers on an ephemeral port for browser tests."""
+
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import uvicorn
+
+from riva.audio.recordings import RecordingStore
+from riva.audio.replies import ReplyConfig, ReplyManager
+from riva.audio.transcription import AsrConfig
+from riva.experiments.asr_stream import AsrSessions, build_vad_app
+from riva.experiments.vad_self_test import SyntheticReplyProvider, SyntheticWire
+from riva.experiments.voice_reply import build_voice_api
+
+
+@dataclass
+class RunningApp:
+    url: str
+    sessions: AsrSessions
+    replies: ReplyManager
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+@contextmanager
+def running_voice_app(
+    root: Path,
+    *,
+    wire: Any = SyntheticWire,
+    provider: Any = SyntheticReplyProvider,
+) -> Iterator[RunningApp]:
+    """Real VAD page (continuous listening on), mocked ASR/LLM/TTS, archive under ``root``."""
+    sessions = AsrSessions(RecordingStore(root / "archive"), AsrConfig(), wire)
+    replies = ReplyManager(ReplyConfig(), provider)
+    api = build_voice_api(build_vad_app(sessions, replies), replies)
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True, name="riva-test-server")
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not server.started:
+        raise RuntimeError("test server did not start")
+    try:
+        yield RunningApp(f"http://127.0.0.1:{port}", sessions, replies)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)

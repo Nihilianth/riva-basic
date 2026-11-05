@@ -46,6 +46,29 @@ stuttering, ambiguous reference, ASR homophone error, silence hallucination, dis
 offer. `tests/support/conversations.py` loads and validates them (`tests/demo/test_conversation_fixtures.py`).
 The older `tests/fixtures/conversations/` files belong to the experiment apps.
 
+## Fake microphone (real VAD against prerecorded speech)
+
+`tests/demo/browser/test_fake_microphone.py` starts the real app (`running_voice_app` in
+`tests/support/server.py`: ephemeral port, deterministic ASR/LLM/TTS fakes, everything else real) and drives
+it with headless Chromium whose microphone plays a WAV
+(`--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=<wav>%noloop`). The real MicVAD,
+hidden submit button, Gradio queue, hold/merge gate, reply-audio endpoint and Web Audio player run.
+Scenarios: speech -> ASR -> reply scheduled; background noise ignored; a fragmented utterance (pause longer
+than the VAD threshold) is held and sent to the "LLM" once as the merged text; speaking over a reply
+suspends and drops it and a new reply follows.
+
+- **Clips**: `tests/fixtures/speech/{zoo,elefanten,schwimmbad}.wav` are synthetic (OpenAI TTS, 16 kHz mono,
+  `manifest.json` lists text/voice/model/hash). `scripts/generate_speech_fixtures.py` makes them; it is
+  **paid**, run only with approval, and refuses to overwrite without `--force`. `tests/support/audio.py`
+  composes silence/noise around them per test.
+- **VAD assets** (vad-web, onnxruntime-web, Silero model; ~45 MB) are served from a local cache via Playwright
+  routing: run `uv run python scripts/fetch_browser_test_assets.py` once (free; `RIVA_BROWSER_ASSETS`
+  overrides `~/.cache/riva-browser-test-assets`). Tests skip with a hint when the cache is missing.
+- **Slow ASR** is simulated with `tests/support/fakes.py::delayed_wire` so a second utterance can start
+  before the first transcript is final, as in real use.
+- **Player assertions** use `window.rivaPlayerStats` (stage counters, scheduled chunks, context state), since
+  headless Chromium has no audible output.
+
 ## Embedded JavaScript
 
 The page scripts live in Python strings (`VAD_BROWSER_JS`, `PLAYBACK_JS`).
@@ -53,5 +76,7 @@ The page scripts live in Python strings (`VAD_BROWSER_JS`, `PLAYBACK_JS`).
 
 ## Known limits
 
-Headless Chromium verifies page logic, DOM, status text and (planned) the VAD pipeline against prerecorded
-clips. It does not verify real microphones, speaker echo, audio quality, or browsers other than Chromium.
+Headless Chromium with prerecorded synthetic clips verifies page logic, DOM, status text and the VAD ->
+backend -> player chain. It does **not** verify real microphones or their processing (echo cancellation,
+gain), speaker echo, audible quality or gaps, real ASR accuracy on atypical speech, or browsers other than
+Chromium. Each browser scenario takes ~10 s; the four fake-microphone tests together ~45 s.
