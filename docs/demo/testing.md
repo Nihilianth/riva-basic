@@ -68,6 +68,17 @@ correction, ASR homophone, stutter, follow-up). Run only with approval:
 It asserts schema compliance; meaning is judged from the saved results under
 `../private/research-data/demo-1/live-eval/`. Without `RIVA_RUN_LIVE_TESTS=1` it is skipped.
 
+## Real end-to-end smoke test (paid, needs approval - not run yet)
+
+`tests/demo/live/test_e2e_smoke.py` sends the synthetic clip `zoo.wav` through the real ASR, LLM and TTS
+once and writes per-stage latency (ASR total and its audio-sent/commit/completed stages, LLM, TTS first
+audio, end of speech to first audio) to `../private/research-data/demo-1/live-eval/`. Cost: a few cents. Run
+only after the user approves the paid calls:
+`RIVA_RUN_LIVE_TESTS=1 uv run --env-file .env pytest -m live tests/demo/live/test_e2e_smoke.py -s`.
+The measuring code (`tests/support/e2e.py`) is exercised offline with fakes in `tests/demo/test_e2e_measure.py`.
+Browser capture and playback latency are not part of this measurement (headless Chromium has no audible
+output); the demo must still be tried once with a real microphone and speakers before it is called ready.
+
 ## Fake microphone (real VAD against prerecorded speech)
 
 `tests/demo/browser/test_fake_microphone.py` starts the real app (`running_voice_app` in
