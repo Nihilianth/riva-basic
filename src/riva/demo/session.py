@@ -68,7 +68,7 @@ class DemoSession:
         archive: SessionArchive,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        config.persona(settings.persona_id)  # fail early on an unknown persona
+        config.check_choice(settings.persona_id, settings.model, settings.voice)
         self.identity, self.config, self.settings = identity, config, settings
         self.processor, self.asr, self.replies, self.archive = processor, asr, replies, archive
         self.monotonic = monotonic

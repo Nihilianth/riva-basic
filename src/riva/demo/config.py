@@ -57,6 +57,14 @@ class DemoConfig:
     journal_tail: int
     llm_timeout_seconds: float
 
+    def check_choice(self, persona_id: str, model: str, voice: str) -> None:
+        """Reject anything outside the configured allowlists (presenter choices are untrusted)."""
+        self.persona(persona_id)
+        if model not in {m.id for m in self.models}:
+            raise ConfigError(f"model is not allowed: {model}")
+        if voice not in self.voices:
+            raise ConfigError(f"voice is not allowed: {voice}")
+
     def persona(self, persona_id: str) -> Persona:
         for persona in self.personas:
             if persona.id == persona_id:

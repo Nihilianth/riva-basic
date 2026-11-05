@@ -8,6 +8,7 @@ import pytest
 from support.demo import make_harness
 from support.fakes import delayed_wire
 
+from riva.demo.config import load_config
 from riva.demo.fakes import turn_json
 from riva.demo.session import SessionSettings
 
@@ -209,6 +210,28 @@ def test_a_doubtful_correction_is_answered_with_a_clarification(tmp_path) -> Non
     assert h.session.journal.passages[0].text == original
 
 
-def test_unknown_persona_fails_early(tmp_path) -> None:
-    with pytest.raises(Exception, match="unknown persona"):
-        make_harness(tmp_path, settings=SessionSettings("nobody", "m", "coral"))
+@pytest.mark.parametrize(
+    "settings,message",
+    [
+        (SessionSettings("nobody", "gpt-4.1-mini", "coral"), "unknown persona"),
+        (SessionSettings("expert", "gpt-9-turbo", "coral"), "model is not allowed"),
+        (SessionSettings("expert", "gpt-4.1-mini", "robot"), "voice is not allowed"),
+    ],
+)
+def test_choices_outside_the_allowlists_fail_early(tmp_path, settings, message) -> None:
+    with pytest.raises(Exception, match=message):
+        make_harness(tmp_path, settings=settings)
+
+
+def test_every_persona_and_model_combination_makes_a_valid_session(tmp_path) -> None:
+    config = load_config()
+    for persona in config.personas:
+        for model in config.models:
+            h = make_harness(
+                tmp_path / f"{persona.id}-{model.id}",
+                settings=SessionSettings(persona.id, model.id, config.default_voice),
+            )
+            h.synth.release.set()
+            assert h.answer("Hallo") is not None
+            assert persona.prompt in str(h.llm.calls[0]["instructions"])
+            assert h.llm.calls[0]["model"] == model.id
