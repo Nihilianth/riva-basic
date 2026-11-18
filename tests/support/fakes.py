@@ -48,6 +48,28 @@ def recording_provider(
     return Recording
 
 
+class EmptyWire(SyntheticWire):
+    """ASR that completes a segment with an empty transcript (VAD fired on noise/silence).
+
+    The turn finishes normally (``status == "completed"``) but with no text, which must resume
+    listening quietly rather than show the participant an error.
+    """
+
+    def send(self, message: str) -> None:
+        event = json.loads(message)
+        if event.get("type") == "session.update":
+            self.events.put({"type": "session.updated"})
+        elif event.get("type") == "input_audio_buffer.commit":
+            self.events.put({"type": "input_audio_buffer.committed", "item_id": "synthetic-item"})
+            self.events.put(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "synthetic-item",
+                    "transcript": "",
+                }
+            )
+
+
 class FailingWire(SyntheticWire):
     """ASR that reports a provider error as soon as audio arrives (the message is never shown)."""
 

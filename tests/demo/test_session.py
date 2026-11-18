@@ -32,6 +32,38 @@ def finish_run(run):
     assert run.done.wait(5)
 
 
+def _segment_outcome(h, *, status: str, text: str | None):
+    from riva.audio.transcription import Transcript
+    from riva.experiments.asr_stream import SegmentOutcome
+
+    saved = h.saved()
+    return SegmentOutcome(
+        saved=saved,
+        result=Transcript(status=status, text=text),
+        duration=1.0,
+        started_ms=0.0,
+        segment_end_ms=None,
+        synthetic=True,
+    )
+
+
+def test_empty_asr_resumes_listening_and_shows_no_error(tmp_path) -> None:
+    h = make_harness(tmp_path)
+    outcome = _segment_outcome(h, status="completed", text="")  # VAD fired, nothing said
+    result = h.session.on_segment(outcome, h.session.token())
+    assert result == "empty"  # not "unusable": the UI keeps listening instead of erroring
+    assert h.session.phase != "error"
+    names = h.names()
+    assert "segment_unusable" in names  # still audited
+    assert "error_shown" not in names  # but no participant error for an empty segment
+
+
+def test_failed_asr_is_still_unusable_and_errors(tmp_path) -> None:
+    h = make_harness(tmp_path)
+    outcome = _segment_outcome(h, status="failed", text=None)  # a real ASR failure
+    assert h.session.on_segment(outcome, h.session.token()) == "unusable"
+
+
 def test_a_turn_updates_journal_archive_and_starts_the_reply(tmp_path, capsys) -> None:
     h = make_harness(tmp_path)
     h.synth.release.set()

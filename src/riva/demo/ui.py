@@ -77,6 +77,30 @@ button#riva-stop { background: #b91c1c !important; color: #ffffff !important;
 button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible, summary:focus-visible {
   outline: 5px solid #1d4ed8 !important; outline-offset: 3px !important; }
 [role="tab"] { font-size: 1.35rem !important; padding: 0.8rem 1.2rem !important; }
+/* One control at a time: the page script sets body[data-control]; the other button is hidden. */
+body[data-control="start"] #riva-stop { display: none !important; }
+body[data-control="stop"] #riva-start { display: none !important; }
+#riva-controls { gap: 1rem; }
+/* Two columns: controls left, produced text right, so a laptop sees button and reply together. */
+#riva-main { gap: 1.4rem; align-items: stretch; }
+@media (max-width: 900px) { #riva-main { flex-direction: column; } }  /* phone/tablet: stacked */
+@media (min-width: 901px) {
+  .gradio-container { max-width: 1200px !important; }
+  #riva-main { flex-wrap: nowrap !important; }
+  #riva-left { flex: 0 0 40% !important; min-width: 0 !important; }
+  #riva-right { flex: 1 1 60% !important; min-width: 0 !important; }
+}
+/* Landscape on a short laptop viewport: compact the tall header so text + button fit together. */
+@media (orientation: landscape) and (max-height: 820px) {
+  h1 { font-size: 1.9rem !important; margin: 0.3rem 0; }
+  #riva-intro { font-size: 1.1rem; padding: 0.6rem 0.9rem; }
+  #riva-intro ol { line-height: 1.35; margin: 0.2rem 0 0.3rem 1.4rem; }
+  #riva-status { min-height: 6rem; padding: 0.8rem; }
+  #riva-status-emoji { font-size: 3.4rem; }
+  #riva-status-text { font-size: 1.6rem; }
+  #riva-start button, #riva-stop button, button#riva-start, button#riva-stop {
+    min-height: 4rem; font-size: 1.6rem !important; }
+}
 """
 
 INTRO_HTML = (
@@ -158,6 +182,9 @@ INDICATOR_JS = """
   const PHASES = __PHASES__;
   const WAIT_NOTE = __WAIT_NOTE__;
   window.rivaServerPhase = 'idle';
+  // One control at a time: `start` when idle/stopped/finished, `stop` while a turn is active. CSS
+  // (body[data-control]) hides the other button; the tick below keeps it in sync with the phase.
+  if (document.body) document.body.dataset.control = 'start';
   let shown = '', closedSince = 0;
   const compute = () => {
     const server = window.rivaServerPhase || 'idle';
@@ -182,9 +209,12 @@ INDICATOR_JS = """
     if (window.rivaVad && window.rivaVad.discardAndPause) window.rivaVad.discardAndPause();
   };
   const WORKING = ['starting', 'transcribing', 'thinking', 'preparing'];
+  const ACTIVE = ['starting', 'listening', 'hearing', 'transcribing', 'thinking',
+                  'preparing', 'speaking'];
   let phaseSince = Date.now();
   setInterval(() => {
     const phase = compute();
+    document.body.dataset.control = ACTIVE.includes(phase) ? 'stop' : 'start';
     const box = document.getElementById('riva-status');
     if (!box) return;
     if (phase === 'closed') {
@@ -261,6 +291,10 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
             result = session.on_segment(outcome, token)
             if result == "held":
                 session.set_phase("listening", token)
+            elif result == "empty":
+                # ASR heard nothing (noise/silence): no error, just keep listening.
+                if session.is_current(token):
+                    session.set_phase("listening", token)
             elif result == "unusable":
                 if session.is_current(token):
                     session.show_error("asr_unusable")
@@ -324,30 +358,39 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         )
         gr.Markdown(f"# {texts.TITLE}\n\n{texts.SUBTITLE}")
         gr.HTML(INTRO_HTML)
-        gr.HTML(STATUS_HTML)
-        with gr.Row():
-            start = gr.Button(texts.START, variant="primary", size="lg", elem_id="riva-start")
-            stop_button = gr.Button(texts.STOP, variant="stop", size="lg", elem_id="riva-stop")
         voice_choices = [(name.capitalize(), name) for name in runtime.config.voices]
-        voice = gr.Dropdown(
-            voice_choices, value=runtime.defaults.voice, label=texts.VOICE_LABEL,
-            info=texts.VOICE_INFO, elem_id="riva-voice", filterable=False,
-        )  # fmt: skip
-        reply = gr.Textbox(
-            label=texts.REPLY_LABEL, interactive=False, lines=3, elem_id="riva-reply",
-            show_label=True,
-        )  # fmt: skip
-        with gr.Tabs():
-            with gr.Tab(texts.TAB_JOURNAL):
-                journal = gr.Textbox(
-                    label=texts.JOURNAL_LABEL, interactive=False, lines=10,
-                    placeholder=texts.JOURNAL_EMPTY, elem_id="riva-journal",
+        # Two columns: controls on the left, produced text on the right, so a laptop can see the
+        # button and the reply at once. On a narrow/portrait screen the CSS stacks them (phone).
+        with gr.Row(elem_id="riva-main"):
+            with gr.Column(elem_id="riva-left"):
+                gr.HTML(STATUS_HTML)
+                with gr.Row(elem_id="riva-controls"):
+                    start = gr.Button(
+                        texts.START, variant="primary", size="lg", elem_id="riva-start"
+                    )
+                    stop_button = gr.Button(
+                        texts.STOP, variant="stop", size="lg", elem_id="riva-stop"
+                    )
+                voice = gr.Dropdown(
+                    voice_choices, value=runtime.defaults.voice, label=texts.VOICE_LABEL,
+                    info=texts.VOICE_INFO, elem_id="riva-voice", filterable=False,
                 )  # fmt: skip
-            with gr.Tab(texts.TAB_HEARD):
-                heard = gr.Textbox(
-                    label=texts.HEARD_LABEL, interactive=False, lines=10,
-                    placeholder=texts.HEARD_EMPTY, elem_id="riva-heard",
+            with gr.Column(elem_id="riva-right"):
+                reply = gr.Textbox(
+                    label=texts.REPLY_LABEL, interactive=False, lines=3, elem_id="riva-reply",
+                    show_label=True,
                 )  # fmt: skip
+                with gr.Tabs():
+                    with gr.Tab(texts.TAB_JOURNAL):
+                        journal = gr.Textbox(
+                            label=texts.JOURNAL_LABEL, interactive=False, lines=10,
+                            placeholder=texts.JOURNAL_EMPTY, elem_id="riva-journal",
+                        )  # fmt: skip
+                    with gr.Tab(texts.TAB_HEARD):
+                        heard = gr.Textbox(
+                            label=texts.HEARD_LABEL, interactive=False, lines=10,
+                            placeholder=texts.HEARD_EMPTY, elem_id="riva-heard",
+                        )  # fmt: skip
         with gr.Accordion(texts.TECH_LABEL, open=False):
             gr.Markdown("Mikrofon: wartet …", elem_id="riva-vad-state")
             timeline = gr.JSON(label=texts.TECH_TIMELINE_LABEL)

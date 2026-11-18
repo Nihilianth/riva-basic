@@ -202,17 +202,21 @@ class DemoSession:
 
     def on_segment(
         self, outcome: SegmentOutcome, token: EpochToken
-    ) -> TurnReport | Literal["held", "unusable"] | None:
+    ) -> TurnReport | Literal["held", "unusable", "empty"] | None:
         """After ASR: hold the words while the user keeps talking, else answer everything together.
 
-        Returns the report, ``"held"`` (waiting for more speech), ``"unusable"`` (ASR failed or
-        empty) or ``None`` (the session was reset meanwhile).
+        Returns the report, ``"held"`` (waiting for more speech), ``"empty"`` (ASR completed but
+        heard nothing - resume listening quietly), ``"unusable"`` (ASR failed - show the error) or
+        ``None`` (the session was reset meanwhile).
         """
         text = outcome.result.text
         segment_id = outcome.saved.metadata.turn_id
         if outcome.result.status != "completed" or not text:
             self.archive.event("segment_unusable", segment=segment_id, asr=outcome.result.status)
-            return "unusable"
+            # Completed-but-empty means the VAD fired but nothing was said (silence, noise, the
+            # loudspeaker): not an error, so resume listening quietly. A genuine ASR failure
+            # (status != "completed") still surfaces the friendly error.
+            return "empty" if outcome.result.status == "completed" else "unusable"
         if not self.is_current(token):
             self._discard("before_gate", segment=segment_id)
             return None
