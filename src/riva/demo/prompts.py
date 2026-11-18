@@ -11,7 +11,8 @@ class TurnContext:
     """Everything the LLM may use for one turn. The transcript is the verbatim ASR text."""
 
     transcript: str
-    journal_tail: tuple[tuple[str, str], ...] = ()  # (passage id, text), oldest first
+    journal_story: str = ""  # the whole journal before the tail, read-only (no ids), oldest first
+    journal_tail: tuple[tuple[str, str], ...] = ()  # recent (passage id, text), revisable
     history: tuple[tuple[str, str], ...] = ()  # (user transcript, assistant reply)
     used_words: tuple[str, ...] = ()
     last_reply_heard: bool | None = None  # None: no earlier reply
@@ -25,9 +26,15 @@ def build_instructions(config: DemoConfig, persona_id: str) -> str:
 
 def build_input(context: TurnContext) -> str:
     parts: list[str] = []
-    if context.journal_tail:
-        entries = "\n".join(f"[{pid}] {text}" for pid, text in context.journal_tail)
-        parts.append(f"Letzte Einträge im Tagebuch (Kennung in eckigen Klammern):\n{entries}")
+    story = context.journal_story.strip()
+    if story or context.journal_tail:
+        blocks: list[str] = []
+        if story:
+            blocks.append(f"Das Tagebuch bisher:\n{story}")
+        if context.journal_tail:
+            entries = "\n".join(f"[{pid}] {text}" for pid, text in context.journal_tail)
+            blocks.append(f"Letzte Einträge im Tagebuch (Kennung in eckigen Klammern):\n{entries}")
+        parts.append("\n\n".join(blocks))
     else:
         parts.append("Das Tagebuch ist noch leer.")
     if context.history:

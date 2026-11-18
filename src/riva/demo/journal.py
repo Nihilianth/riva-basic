@@ -80,6 +80,15 @@ class Journal:
     def revisable_ids(self) -> frozenset[str]:
         return frozenset(pid for pid, _ in self.tail())
 
+    def older_text(self) -> str:
+        """The entries BEFORE the revisable tail, as plain first-person text (no ids).
+
+        Shown to the LLM as the read-only "story so far" so it has the whole journal for continuity
+        without revising an old entry (only ``tail`` entries carry ids and are revisable).
+        """
+        older = self.passages[: -self.window] if len(self.passages) > self.window else []
+        return "\n\n".join(p.text for p in older)
+
     def text(self) -> str:
         """The journal as one document: a paragraph per passage."""
         return "\n\n".join(p.text for p in self.passages)

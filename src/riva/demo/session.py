@@ -244,6 +244,7 @@ class DemoSession:
     def _context(self, text: str) -> TurnContext:
         return TurnContext(
             transcript=text,
+            journal_story=self.journal.older_text(),  # whole story so far (read-only, no ids)
             journal_tail=self.journal.tail(),
             history=tuple(self.history[-self.config.history_exchanges :]),
             used_words=tuple(self.used_words),
