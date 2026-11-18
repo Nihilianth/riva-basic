@@ -8,7 +8,14 @@ from support.demo import GatedSynth
 
 from riva.audio.recordings import new_development_session
 from riva.demo import presenter
-from riva.demo.app import MAX_PAUSE_MS, MIN_PAUSE_MS, build_demo_api, build_runtime
+from riva.demo.app import (
+    MAX_MIC_LEVEL,
+    MAX_PAUSE_MS,
+    MIN_MIC_LEVEL,
+    MIN_PAUSE_MS,
+    build_demo_api,
+    build_runtime,
+)
 from riva.demo.config import ConfigError, load_config
 from riva.demo.fakes import FakeProbe, ScriptedTurnLLM, turn_json
 from riva.demo.providers import Providers
@@ -57,13 +64,25 @@ def test_defaults_apply_to_new_sessions_only_and_are_validated(tmp_path) -> None
 def test_pause_threshold_is_bounded_and_served_to_the_page(tmp_path) -> None:
     rt, _ = make_runtime(tmp_path)
     client = TestClient(build_demo_api(rt))
-    assert client.get("/riva/settings").json() == {"redemption_ms": 900}
+    assert client.get("/riva/settings").json() == {"redemption_ms": 900, "mic_level": 0}
     assert rt.set_pause_ms(1500) == 1500
-    assert client.get("/riva/settings").json() == {"redemption_ms": 1500}
+    assert client.get("/riva/settings").json() == {"redemption_ms": 1500, "mic_level": 0}
     for bad in (MIN_PAUSE_MS - 1, MAX_PAUSE_MS + 1):
         with pytest.raises(ValueError):
             rt.set_pause_ms(bad)
     assert rt.pause_ms == 1500
+
+
+def test_mic_level_is_bounded_and_served_to_the_page(tmp_path) -> None:
+    rt, _ = make_runtime(tmp_path)
+    client = TestClient(build_demo_api(rt))
+    assert client.get("/riva/settings").json()["mic_level"] == 0  # off by default
+    assert rt.set_mic_level(30) == 30
+    assert client.get("/riva/settings").json()["mic_level"] == 30
+    for bad in (MIN_MIC_LEVEL - 1, MAX_MIC_LEVEL + 1):
+        with pytest.raises(ValueError):
+            rt.set_mic_level(bad)
+    assert rt.mic_level == 30
 
 
 def test_both_pages_are_served_on_one_server(tmp_path) -> None:

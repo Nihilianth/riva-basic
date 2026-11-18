@@ -818,12 +818,16 @@ async (enabled) => {
     const ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
     // The presenter may set the pause threshold (demo app); other pages have no such route.
     let redemptionMs = 900;
+    window.rivaVad.micLevel = 0;  // loudness gate (0-100, 0 = off), set by the presenter
     try {
       const response = await fetch("/riva/settings", {cache: "no-store"});
       if (response.ok) {
         const settings = await response.json();
         if (Number.isFinite(settings.redemption_ms)) {
           redemptionMs = Math.min(3000, Math.max(300, settings.redemption_ms));
+        }
+        if (Number.isFinite(settings.mic_level)) {
+          window.rivaVad.micLevel = Math.min(100, Math.max(0, settings.mic_level));
         }
       }
     } catch (_) {}
@@ -835,6 +839,9 @@ async (enabled) => {
       redemptionMs: redemptionMs,
       preSpeechPadMs: 300,
       minSpeechMs: 250,
+      // Keep the browser from auto-gaining quiet, distant speakers up to full volume (a common
+      // cause of hearing people across the room); the loudness gate below then filters them.
+      additionalAudioConstraints: {autoGainControl: false},
       onSpeechStart: () => {
         if (window.rivaVad.discard) return;
         window.rivaVad.speechStartMs = performance.now();
@@ -851,6 +858,18 @@ async (enabled) => {
       onSpeechEnd: (audio) => {
         if (window.rivaVad.discard) {
           stage("discarded");
+          return;
+        }
+        // Loudness gate: a segment quieter than the presenter's threshold (e.g. someone across
+        // the room) is ignored - treated like a misfire, nothing is submitted.
+        let sumSq = 0;
+        for (let i = 0; i < audio.length; i++) sumSq += audio[i] * audio[i];
+        const level = audio.length ? Math.sqrt(sumSq / audio.length) * 300 : 0;  // 0-100 scale
+        if (window.rivaVad.micLevel > 0 && level < window.rivaVad.micLevel) {
+          window.rivaVad.speaking = false;
+          window.rivaVad.speechStartMs = null;
+          if (window.rivaResumeReplyAudio) window.rivaResumeReplyAudio();
+          stage("zu leise, ignoriert (" + level.toFixed(0) + " < " + window.rivaVad.micLevel + ")");
           return;
         }
         window.rivaVad.speaking = false;

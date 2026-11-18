@@ -36,6 +36,10 @@ if TYPE_CHECKING:
 
 HOST = "127.0.0.1"  # the demo listens on loopback only; there is no option to change it
 MIN_PAUSE_MS, MAX_PAUSE_MS = 500, 3000
+# Microphone loudness gate (0 = off): a detected segment quieter than this level (0-100, where
+# level = RMS*300, so 100 ~= very loud) is ignored, so speakers across the room do not trigger a
+# turn. A typical near speaker is ~30-50; a cross-room voice is much lower.
+MIN_MIC_LEVEL, MAX_MIC_LEVEL = 0, 100
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 KEEP_CLOSED = 50  # closed sessions stay as records so a late poll cannot resurrect one
 
@@ -65,6 +69,7 @@ class DemoRuntime:
     idle_timeout: float = 180.0
     monotonic: Callable[[], float] = time.monotonic
     pause_ms: int = 900  # VAD pause threshold read by new participant pages (/riva/settings)
+    mic_level: int = 0  # loudness gate (0-100, 0 = off); read by new participant pages
     probe: ServiceProbe | None = None
     voices: VoicePreviews | None = None
     sessions: dict[str, DemoSession] = field(default_factory=dict)
@@ -102,6 +107,12 @@ class DemoRuntime:
             raise ValueError(f"pause must be {MIN_PAUSE_MS}-{MAX_PAUSE_MS} ms")
         self.pause_ms = int(value)
         return self.pause_ms
+
+    def set_mic_level(self, value: int) -> int:
+        if isinstance(value, bool) or not MIN_MIC_LEVEL <= int(value) <= MAX_MIC_LEVEL:
+            raise ValueError(f"mic level must be {MIN_MIC_LEVEL}-{MAX_MIC_LEVEL}")
+        self.mic_level = int(value)
+        return self.mic_level
 
     def stop_all(self) -> int:
         """Alles anhalten = Stopp for every active session; returns how many were stopped."""
@@ -228,7 +239,7 @@ def is_loopback(host: str) -> bool:
 
 
 def build_demo_api(runtime: DemoRuntime) -> FastAPI:
-    from riva.demo import presenter
+    from riva.demo import presenter, replay
     from riva.demo.ui import CSS, HEAD, INDICATOR_JS, build_participant_app  # noqa: F401
 
     app: gr.Blocks = build_participant_app(runtime)
@@ -237,8 +248,8 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
     def lifecycle_routes(api: FastAPI) -> None:
         @api.get("/riva/settings")
         async def settings() -> dict[str, int]:
-            """Pause threshold set by the presenter; read by the VAD when Start is pressed."""
-            return {"redemption_ms": runtime.pause_ms}
+            """Pause threshold + mic loudness gate from the presenter; read by the VAD on Start."""
+            return {"redemption_ms": runtime.pause_ms, "mic_level": runtime.mic_level}
 
         @api.get("/riva/voice_preview/{voice}")
         async def voice_preview(voice: str) -> FileResponse:
@@ -249,6 +260,26 @@ def build_demo_api(runtime: DemoRuntime) -> FastAPI:
                 path = await anyio.to_thread.run_sync(runtime.voices.get, voice)
             except VoiceError:
                 raise HTTPException(status_code=502) from None
+            return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+        @api.get("/presenter/replay_audio/{user_id}/{session_id}/segment/{segment_id}")
+        async def replay_segment_audio(
+            user_id: str, session_id: str, segment_id: str
+        ) -> FileResponse:
+            """Private participant recording for the review tab (loopback-guarded, validated)."""
+            path = replay.segment_audio_path(runtime.archive_root, user_id, session_id, segment_id)
+            if path is None:
+                raise HTTPException(status_code=404)
+            return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+        @api.get("/presenter/replay_audio/{user_id}/{session_id}/reply/{generation_id}")
+        async def replay_reply_audio(
+            user_id: str, session_id: str, generation_id: str
+        ) -> FileResponse:
+            """Private synthesized reply audio for the review tab (loopback-guarded, validated)."""
+            path = replay.reply_audio_path(runtime.archive_root, user_id, session_id, generation_id)
+            if path is None:
+                raise HTTPException(status_code=404)
             return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
         @api.post("/riva/session_end")

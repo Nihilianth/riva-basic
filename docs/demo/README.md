@@ -40,7 +40,10 @@ preview sentence and limits are in `src/riva/demo/defaults/*.toml` (copy them in
   applied to the selected running session; (3) sessions - live table, **Gewählte Sitzung beenden (Neustart)**
   (closes at once, the participant page reloads into a new session), **Alle beenden**, **⏹ Alles anhalten**
   (stops speech in every session, also the audio already buffered in the browser), journal, verbatim text,
-  timeline and silent alerts (possible distress) of the selected session. The participant page contains none
+  timeline and silent alerts (possible distress) of the selected session; and (4) **Wiedergabe** - a read-only
+  replay of any session on disk (including closed ones), in order: what was heard (with the recording),
+  what went into the language model (the prompt, raw output, metrics), the journal change, and what was sent
+  to the voice and played (the phrases and the synthesized audio). The participant page contains none
   of this. The pause threshold (500-3000 ms, default 900) is read when a participant presses Start.
 - Journaling turn: ASR, hold/merge of fragments, structured LLM turn, journal (append, controlled
   revision), spoken reply, private session archive.
@@ -83,8 +86,10 @@ so weit." (the bar stands still for people who prefer reduced motion).
 Neither page has a login. The server listens on `127.0.0.1` only and has **no option to change that**; in
 addition `/presenter` answers loopback clients only and returns 403 otherwise (tested). Do not expose the demo
 with port forwarding, a tunnel, a VM bridge or a reverse proxy: behind a proxy on the same machine remote users
-appear as loopback and the guard no longer helps. The presenter page shows journals, transcripts and timelines and
-can reset sessions and start paid requests; it must stay local unless real access control is added first.
+appear as loopback and the guard no longer helps. The presenter page shows journals, transcripts and timelines,
+replays whole sessions and plays their private recorded and synthesized audio (served only under the
+loopback-guarded `/presenter/replay_audio/...` routes), and can reset sessions and start paid requests; it must
+stay local unless real access control is added first.
 
 ## Deleting a session and its recordings
 

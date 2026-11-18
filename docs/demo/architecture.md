@@ -127,6 +127,25 @@ presenter can prepare all previews after a cost confirmation, and the pre-flight
 `/presenter*` (HTTP and WebSocket) with 403 unless the client address is loopback. It is defense in depth, not
 access control: behind a reverse proxy on the same machine every client looks like loopback.
 
+## Session replay / review (`riva.demo.replay`, presenter "Wiedergabe" tab, riva-skm.23)
+Read-only reconstruction of any session **on disk** (including long-closed ones that have left
+`runtime.sessions`), shown only on the presenter page. `replay.list_sessions(archive_root)` enumerates
+`<root>/<user>/<session>/` across all user ids; `load_replay(root, user, session)` builds an ordered list of
+steps from `timeline.jsonl`, enriched from the matching `utterances/<id>.json` (the exact `llm_input` prompt,
+raw output, outcome metrics, journal change, spoken reply) and `<turn>/replies/<gen>/reply.json` (the
+`requested_speech_phrases` that went to TTS, voice, status). `turn_started` folds its `llm_response` /
+`journal_applied` / `reply_started` events into one block; `segment_saved` shows the verbatim ASR; the other
+events (`turn_held`, `segment_unusable`, `error_shown`, `interrupted`, `session_closed`, …) appear in order.
+`render_html` emits the view with every piece of private text HTML-escaped. The tab plays the private audio
+through two `FileResponse` routes, `/presenter/replay_audio/<user>/<session>/segment/<id>` (participant
+`recording.wav`) and `/presenter/replay_audio/<user>/<session>/reply/<gen>` (synthesized `speech.wav`): they
+are registered in `extra_routes` (before the Gradio mounts, so they are not shadowed) and sit under
+`/presenter*`, so the loopback guard covers them. All ids are validated (`[A-Za-z0-9_-]{1,64}`) and the
+resolved path is checked against the archive root (traversal → 404). The module never writes and never logs
+content. It tolerates partial/legacy archives (no turns, a missing utterance file, a reply with no
+`speech.wav`). Tests: `tests/demo/test_replay.py` (synthetic fixtures + the routes) and the presenter
+Playwright test; actual audio *audibility* is confirmed by the manual pre-demo check, not by tests.
+
 ## Stopp = interrupt (`DemoSession.interrupt`, riva-skm.21)
 One mechanism, the session epoch/commit gate. `interrupt()` bumps the epoch **without closing** the session, so
 tokens captured by running stages (ASR `segment_updates`, `on_segment`, LLM `answer`) are stale: their results are

@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from riva.demo import preflight, texts
+from riva.demo import preflight, replay, texts
 from riva.demo.session import DemoSession, SessionSettings
 
 if TYPE_CHECKING:
@@ -53,6 +53,37 @@ async () => {
   window.rivaToneContext = ctx;
 }
 """
+LEVEL_JS = """
+async () => {
+  const out = document.getElementById('pf-level-result');
+  let max = 0;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(
+      {audio: {autoGainControl: false}});
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    const started = Date.now();
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const level = Math.round(Math.sqrt(sum / buf.length) * 300);  // same 0-100 scale as the gate
+      max = Math.max(max, level);
+      out.textContent = 'Pegel jetzt: ' + level + ' (Maximum: ' + max +
+        '). Stelle die Schwelle knapp unter deine normale Sprechlautstärke.';
+      if (Date.now() - started < 8000) { requestAnimationFrame(tick); }
+      else { stream.getTracks().forEach((t) => t.stop()); ctx.close(); }
+    };
+    tick();
+  } catch (error) {
+    out.textContent = '❌ Kein Zugriff auf das Mikrofon.';
+  }
+}
+"""
 HEARD_JS = (
     "() => { document.getElementById('pf-tone-result').textContent = '✅ Der Ton wurde gehört.'; }"
 )
@@ -71,8 +102,39 @@ button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible {
   outline: 4px solid #1d4ed8 !important; outline-offset: 2px !important; }
 button#pf-run { background: #166534 !important; color: #ffffff !important; }
 button#act-stop { background: #b91c1c !important; color: #ffffff !important; }
-.min_value, .max_value, .subdued { color: #374151 !important; }
+.min_value, .max_value, .subdued, .info-text { color: #374151 !important; }
 #pf-mic-result, #pf-tone-result { font-size: 1.1rem; font-weight: 600; min-height: 1.6rem; }
+/* Session replay ("Wiedergabe") tab: ordered, read-only reconstruction of a session. */
+.rv-replay { display: flex; flex-direction: column; gap: 0.6rem; }
+.rv-summary { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 1rem;
+  padding: 0.8rem 1rem; border: 2px solid #1f2937; border-radius: 0.6rem; background: #f9fafb; }
+.rv-summary .rv-k { font-weight: 700; color: #374151; }
+.rv-summary .rv-v { color: #111827; }
+.rv-seg, .rv-turn { display: flex; gap: 0.8rem; align-items: flex-start; }
+.rv-when { flex: 0 0 4.5rem; font-variant-numeric: tabular-nums; color: #374151;
+  padding-top: 0.6rem; }
+.rv-card { flex: 1; padding: 0.7rem 0.9rem; border-radius: 0.6rem; border: 2px solid #d1d5db; }
+.rv-seg .rv-card { background: #eff6ff; border-color: #bfdbfe; }
+.rv-turn .rv-card { background: #ffffff; border-color: #c7d2fe; }
+.rv-h { font-weight: 700; color: #111827; margin-bottom: 0.3rem; }
+.rv-sub { font-weight: 700; color: #374151; margin-top: 0.5rem; font-size: 0.95rem; }
+.rv-text { color: #111827; white-space: pre-wrap; }
+.rv-reply { color: #14532d; white-space: pre-wrap; font-weight: 600; }
+.rv-metrics { color: #374151; font-size: 0.95rem; margin: 0.3rem 0; }
+.rv-flag { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.5rem; border-radius: 1rem;
+  background: #fef9c3; color: #7c2d12; font-size: 0.85rem; border: 1px solid #a16207; }
+.rv-flag.rv-err { background: #fee2e2; color: #7f1d1d; border-color: #b91c1c; }
+.rv-badge { margin-left: 0.4rem; padding: 0.05rem 0.5rem; border-radius: 1rem; background: #e5e7eb;
+  color: #374151; font-size: 0.85rem; }
+.rv-phrases { margin: 0.2rem 0 0.4rem 1.4rem; color: #111827; }
+.rv-det summary { cursor: pointer; color: #1d4ed8; font-weight: 600; margin: 0.3rem 0; }
+.rv-det pre { white-space: pre-wrap; background: #f3f4f6; color: #111827; padding: 0.6rem;
+  border-radius: 0.4rem; max-height: 22rem; overflow: auto; border: 1px solid #d1d5db; }
+.rv-audio { display: block; width: 100%; margin-top: 0.5rem; }
+.rv-ev { display: flex; gap: 0.8rem; color: #374151; padding: 0.1rem 0; }
+.rv-ev .rv-when { flex: 0 0 4.5rem; padding-top: 0; }
+.rv-ev-label { font-weight: 600; }
+.rv-empty { color: #374151; }
 """
 HEAD = (
     "<script>document.documentElement.lang = 'de';"
@@ -86,6 +148,9 @@ MIC_IDLE = (
 )
 TONE_IDLE = (
     '<p id="pf-tone-result" role="status" aria-live="polite">Testton: noch nicht geprüft.</p>'
+)
+LEVEL_IDLE = (
+    '<p id="pf-level-result" role="status" aria-live="polite">Pegel: noch nicht gemessen.</p>'
 )
 
 
@@ -185,14 +250,16 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
         check = preflight.paid_voice_test(probe, config, voice, confirmed=True)
         return f"{preflight.STATUS_LABELS[check.status]} – {check.detail}"
 
-    def save_defaults(persona: str, model: str, voice: str, pause: int) -> str:
+    def save_defaults(persona: str, model: str, voice: str, pause: int, mic: int) -> str:
         try:
             runtime.set_defaults(_settings_from(runtime, persona, model, voice))
             runtime.set_pause_ms(int(pause))
+            runtime.set_mic_level(int(mic))
         except ValueError:
             return "❌ Diese Auswahl ist nicht erlaubt."
         return (
-            "✅ Gespeichert für neue Sitzungen. Die Pause gilt, wenn ein Teilnehmer Start drückt."
+            "✅ Gespeichert für neue Sitzungen. Pause und Mikrofon-Schwelle gelten, "
+            "wenn ein Teilnehmer Start drückt."
         )
 
     def apply_active(persona: str, model: str, voice: str, session_id: str | None) -> str:
@@ -215,6 +282,21 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
 
     def stop_all() -> str:
         return f"⏹ Sprache angehalten in {runtime.stop_all()} Sitzung(en)."
+
+    def replay_choices() -> list[tuple[str, str]]:
+        return [(s.label, s.value) for s in replay.list_sessions(runtime.archive_root)]
+
+    def show_replay(value: str | None) -> str:
+        if not value or "/" not in value:
+            return "<p class='rv-empty'>Keine Sitzung ausgewählt.</p>"
+        user_id, _, session_id = value.partition("/")
+        model = replay.load_replay(runtime.archive_root, user_id, session_id)
+        if model is None:
+            return "<p class='rv-empty'>Sitzung nicht gefunden.</p>"
+        return replay.render_html(model)
+
+    def refresh_replay_list() -> Any:
+        return gr.update(choices=replay_choices())
 
     def refresh(selected: str | None) -> tuple[Any, ...]:
         choices = session_choices(runtime)
@@ -241,8 +323,10 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
                 tone_button = gr.Button("Testton abspielen", elem_id="pf-tone")
                 heard_button = gr.Button("Ja, Ton gehört", elem_id="pf-heard")
                 unheard_button = gr.Button("Nein, kein Ton", elem_id="pf-unheard")
+                level_button = gr.Button("Pegel messen (8 s)", elem_id="pf-level")
             gr.HTML(MIC_IDLE)
             gr.HTML(TONE_IDLE)
+            gr.HTML(LEVEL_IDLE)
             with gr.Row():
                 test_voice = gr.Dropdown(
                     choices=list(config.voices),
@@ -265,6 +349,11 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
                     list(config.voices), value=runtime.defaults.voice, label="Stimme"
                 )
                 pause = gr.Slider(500, 3000, value=runtime.pause_ms, step=100, label="Pause in ms")
+                mic = gr.Slider(
+                    0, 100, value=runtime.mic_level, step=5,
+                    label="Mikrofon-Schwelle (0 = aus)",
+                    info="Leiser als dieser Pegel wird ignoriert (gegen Stimmen im Raum).",
+                )  # fmt: skip
             with gr.Row():
                 save_button = gr.Button("Für neue Sitzungen speichern", elem_id="set-save")
                 apply_button = gr.Button("Auf gewählte Sitzung anwenden", elem_id="set-apply")
@@ -289,6 +378,22 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
                     label="Das habe ich gehört", lines=8, interactive=False, elem_id="p-heard"
                 )
             timeline = gr.JSON(label="Ablauf (letzte Ereignisse)")
+
+        with gr.Accordion("4. Wiedergabe (Sitzung ansehen)", open=False):
+            gr.Markdown(
+                "Jede gespeicherte Sitzung – auch beendete – in der Reihenfolge, in der sie lief: "
+                "was gehört wurde, was ins Sprachmodell ging, was an die Sprachausgabe ging und "
+                "abgespielt wurde. Nur lesend, nur lokal."
+            )
+            with gr.Row():
+                replay_select = gr.Dropdown(
+                    label="Sitzung", choices=replay_choices(), elem_id="rv-select"
+                )
+                replay_refresh = gr.Button("Liste aktualisieren", elem_id="rv-refresh")
+            replay_view = gr.HTML(
+                "<p class='rv-empty'>Keine Sitzung ausgewählt.</p>", elem_id="rv-view"
+            )
+
         ticker = gr.Timer(1.0)
 
         hide: dict[str, Any] = {
@@ -299,15 +404,20 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
         tone_button.click(None, js=TONE_JS, **hide)
         heard_button.click(None, js=HEARD_JS, **hide)
         unheard_button.click(None, js=UNHEARD_JS, **hide)
+        level_button.click(None, js=LEVEL_JS, **hide)
         prepare_button.click(prepare_voices, [confirm], [prepare_result], **hide)
         voice_button.click(voice_test, [confirm, test_voice], [voice_result], **hide)
-        save_button.click(save_defaults, [persona, model, voice, pause], [settings_result], **hide)
+        save_button.click(
+            save_defaults, [persona, model, voice, pause, mic], [settings_result], **hide
+        )
         apply_button.click(
             apply_active, [persona, model, voice, selected], [settings_result], **hide
         )
         stop_button.click(stop_all, outputs=[action_result], **hide)
         end_button.click(end_selected, [selected], [action_result], **hide)
         end_all_button.click(end_all, outputs=[action_result], **hide)
+        replay_refresh.click(refresh_replay_list, outputs=[replay_select], **hide)
+        replay_select.change(show_replay, [replay_select], [replay_view], **hide)
         ticker.tick(
             refresh, [selected],
             [sessions_table, selected, journal, heard, timeline, alerts], **hide,

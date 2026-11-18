@@ -1,10 +1,12 @@
-"""The presenter page in headless Chromium: checks, settings, sessions, reset, stop."""
+"""The presenter page in headless Chromium: checks, settings, sessions, reset, stop, replay."""
 
+import re
 from pathlib import Path
 from typing import Any
 
 from conftest import mic_browser  # type: ignore[import-not-found]
 from support.audio import clip, compose, silence
+from support.replay_fixture import write_session
 from support.server import running_demo_app
 from support.ui import LISTENING, SlowTone, load
 
@@ -157,6 +159,27 @@ def test_alles_anhalten_stops_the_spoken_reply_on_the_participant_page(
             "(window.rivaPlayerStats.counts.stopped_by_user || 0) >= 1", timeout=10_000
         )
         assert not participant.evaluate("window.rivaIsPlaying()")
+
+
+def test_wiedergabe_tab_replays_a_seeded_session_with_audio(
+    tmp_path: Path, playwright_instance: Any
+) -> None:
+    with demo(tmp_path) as app, mic_browser(playwright_instance) as context:
+        write_session(app.runtime.archive_root)  # a synthetic closed session on disk
+        page = open_presenter(context, app)
+        page.get_by_text("4. Wiedergabe (Sitzung ansehen)").click()
+        page.get_by_role("button", name="Liste aktualisieren").click()
+        page.get_by_label("Sitzung", exact=True).click()
+        page.get_by_role("option", name=re.compile("sess1syn")).click()
+        view = page.locator("#rv-view")
+        view.get_by_text("Eingabe an das Sprachmodell").wait_for(timeout=15_000)
+        text = view.inner_text()
+        assert "Was hast du im Zoo gesehen?" in text  # a phrase that was sent to TTS
+        assert "appended p0" in text  # the journal change in order
+        audio = view.locator("audio")
+        assert audio.count() >= 2  # participant recording + synthesized reply, both playable
+        srcs = [audio.nth(i).get_attribute("src") for i in range(audio.count())]
+        assert all(src and "/presenter/replay_audio/" in src for src in srcs)
 
 
 def test_the_only_accessibility_exception_is_the_known_gradio_empty_table_placeholder(
