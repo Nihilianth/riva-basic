@@ -16,7 +16,7 @@ SCHEMA_VERSION = 1
 JOURNAL_OPS = ("append", "revise", "none")
 EDIT_KINDS = ("asr_fix", "grammar", "disfluency", "clarity")
 CONFIDENCES = ("low", "medium", "high")
-FLAGS = ("asr_unclear", "possible_distress")
+FLAGS = ("asr_unclear", "possible_distress", "meta")
 MAX_REPLY_CHARS = 500
 LOW_GROUNDING = 0.6
 _MARKDOWN = re.compile(r"[*_#`>]|^\s*[-•]\s|^\s*\d+[.)]\s", re.MULTILINE)
@@ -246,9 +246,12 @@ def validate_turn(
         _require(
             grounding_score(evidence, transcript) >= LOW_GROUNDING, "evidence_not_in_transcript"
         )
-    else:  # none: only a clarification or an unusable transcript justifies no journal change
+    else:  # none: justified by a clarification, unusable audio, or a meta/conversational turn
         _require(op.text == "" and op.target_id is None, "bad_journal_op")
-        _require(result.clarification_needed or "asr_unclear" in result.flags, "bad_journal_op")
+        _require(
+            result.clarification_needed or "asr_unclear" in result.flags or "meta" in result.flags,
+            "bad_journal_op",
+        )
 
     if result.added_facts:
         soft.append("added_facts")

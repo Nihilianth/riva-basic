@@ -159,10 +159,12 @@ def test_revise_requires_a_listed_target_and_evidence_from_this_utterance() -> N
     ) == ("evidence_not_in_transcript")
 
 
-def test_none_is_only_valid_for_a_clarification_or_unclear_audio() -> None:
+def test_none_is_only_valid_for_a_clarification_unclear_audio_or_meta_turn() -> None:
     none = {"type": "none", "text": "", "target_id": None, "evidence": None}
     assert check(good(journal_op=none, clarification_needed=True)).result.journal_op.type == "none"
     assert check(good(journal_op=none, flags=["asr_unclear"])).result.journal_op.type == "none"
+    # A meta turn (talk about the assistant) may decline to journal via the meta flag.
+    assert check(good(journal_op=none, flags=["meta"])).result.journal_op.type == "none"
     assert code_of(good(journal_op=none)) == "bad_journal_op"
     assert (
         code_of(good(journal_op={**none, "text": "Etwas"}, clarification_needed=True))
