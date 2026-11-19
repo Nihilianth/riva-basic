@@ -93,10 +93,30 @@ def test_a_confident_correction_applies_even_when_grounding_is_low() -> None:
     assert change.kind == "revised" and journal.passages[0].text == revised
 
 
+def test_a_correction_with_added_facts_still_applies_but_is_flagged() -> None:
+    # Regression (riva-skm.32, session d65569fd): a real correction reads as "added facts" relative
+    # to the old entry (the corrected content is new there), and the model over-reports it. That
+    # soft flag must FLAG the revise, not discard it - otherwise the journal keeps the very text the
+    # person just corrected (here: "danach getestet" after they said the tests are not done yet).
+    journal = Journal()
+    original = "Ich habe an der Software geschrieben und danach getestet."
+    journal.apply(outcome_for(original, journal, append_json(original)), "t0")
+    revised = "Ich habe an der Software weitergeschrieben. Die Tests stehen noch aus."
+    out = outcome_for(
+        "Nee, ich habe nur weitergeschrieben, die Tests stehen noch aus.",
+        journal,
+        revise_json("p0", revised, "die Tests stehen noch aus", added_facts=["Tests stehen aus"]),
+    )
+    assert "added_facts" in (out.validated.soft_flags if out.validated else ())
+    assert out.validated is not None and out.validated.result.uncertain is False
+    change = journal.apply(out, "t1")
+    assert change.kind == "revised" and journal.passages[0].text == revised
+
+
 @pytest.mark.parametrize(
     "extra",
-    [{"uncertain": True}, {"added_facts": ["vier Löwen"]}],
-    ids=["model-uncertain", "invented-fact"],
+    [{"uncertain": True}, {"clarification_needed": True}],
+    ids=["model-uncertain", "needs-clarification"],
 )
 def test_a_doubtful_revise_never_changes_the_journal(extra) -> None:
     journal = Journal()

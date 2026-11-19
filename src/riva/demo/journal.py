@@ -128,18 +128,15 @@ class Journal:
         op = outcome.journal_op
         target = next((p for p in self.passages[-self.window :] if p.id == op.target_id), None)
         result = outcome.validated.result if outcome.validated else None
-        soft = outcome.validated.soft_flags if outcome.validated else ()
-        # Block only a genuinely doubtful correction: unknown target, the model itself unsure, or
-        # invented facts. Low grounding of the revised text is EXPECTED for a correction (it
-        # restates the entry, not the short correction utterance), so it must not block -
-        # validate_turn already requires the correction's evidence to be grounded in what was said
-        # (grounding is a soft signal, never a gate).
-        doubtful = (
-            result is None
-            or result.uncertain
-            or result.clarification_needed
-            or "added_facts" in soft
-        )
+        # Block only a genuinely doubtful correction: unknown target, or the model itself unsure
+        # (raw "uncertain", or an explicit request to clarify which entry/what was meant). Soft
+        # signals must NOT discard a targeted correction - they only flag it for review, or the
+        # journal keeps the wrong text the person just corrected. Low grounding is EXPECTED (the
+        # revised text restates the entry, not the short correction utterance), and "added_facts"
+        # routinely over-fires on a correction because the corrected content reads as new relative
+        # to the old entry; validate_turn already grounds the correction's evidence in what was
+        # said. Both stay recorded in soft_flags for the presenter.
+        doubtful = result is None or result.uncertain or result.clarification_needed
         if target is None or doubtful:
             # Doubtful correction: never guess. Keep the journal, ask instead.
             reply = outcome.spoken_reply
