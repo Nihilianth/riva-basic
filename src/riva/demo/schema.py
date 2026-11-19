@@ -216,7 +216,6 @@ def validate_turn(
     transcript: str,
     *,
     revisable_ids: frozenset[str] = frozenset(),
-    meta_hint: bool = False,
 ) -> ValidatedTurn:
     """Apply the hard structural gates, then collect soft flags (never rejecting on meaning)."""
     reply = result.spoken_reply.strip()
@@ -247,17 +246,11 @@ def validate_turn(
         _require(
             grounding_score(evidence, transcript) >= LOW_GROUNDING, "evidence_not_in_transcript"
         )
-    else:  # none: justified by a clarification, unusable audio, or a meta/conversational turn
+    else:  # none: a deliberate "nothing to journal" (clarification, unusable audio, meta turn).
+        # Trust a well-formed none (empty text, no target). Requiring a flag here forced a
+        # bad_journal_op retry + fallback that WRONGLY appended meta turns and replied "nicht
+        # verstanden"; the prompt still steers when to use none.
         _require(op.text == "" and op.target_id is None, "bad_journal_op")
-        # meta_hint: the classifier already judged this a meta turn, so accept "none" even if the
-        # model did not also set the flag (avoids a bad_journal_op retry-storm + fallback append).
-        _require(
-            result.clarification_needed
-            or "asr_unclear" in result.flags
-            or "meta" in result.flags
-            or meta_hint,
-            "bad_journal_op",
-        )
 
     if result.added_facts:
         soft.append("added_facts")

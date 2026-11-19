@@ -159,15 +159,15 @@ def test_revise_requires_a_listed_target_and_evidence_from_this_utterance() -> N
     ) == ("evidence_not_in_transcript")
 
 
-def test_none_is_only_valid_for_a_clarification_unclear_audio_or_meta_turn() -> None:
+def test_a_well_formed_none_is_accepted_as_a_deliberate_no_journal() -> None:
     none = {"type": "none", "text": "", "target_id": None, "evidence": None}
+    # A well-formed none (empty text, no target) is trusted - with or without a flag - so meta turns
+    # are not forced into a fallback append. The prompt decides when to use none.
+    assert check(good(journal_op=none)).result.journal_op.type == "none"
     assert check(good(journal_op=none, clarification_needed=True)).result.journal_op.type == "none"
-    assert check(good(journal_op=none, flags=["asr_unclear"])).result.journal_op.type == "none"
-    # A meta turn (talk about the assistant) may decline to journal via the meta flag.
     assert check(good(journal_op=none, flags=["meta"])).result.journal_op.type == "none"
-    # ...or when the classifier already judged it meta (meta_hint), even without the flag.
-    assert check(good(journal_op=none), meta_hint=True).result.journal_op.type == "none"
-    assert code_of(good(journal_op=none)) == "bad_journal_op"
+    # But a none must still be structurally empty.
+    assert code_of(good(journal_op={**none, "text": "Etwas"})) == "bad_journal_op"
     assert (
         code_of(good(journal_op={**none, "text": "Etwas"}, clarification_needed=True))
         == "bad_journal_op"

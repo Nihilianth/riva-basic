@@ -71,7 +71,7 @@ class DemoRuntime:
     pause_ms: int = 900  # VAD pause threshold read by new participant pages (/riva/settings)
     mic_level: int = 0  # loudness gate (0-100, 0 = off); read by new participant pages
     classifier_enabled: bool = False  # toggle the optional meta/correction/diary classifier
-    classifier_threshold: float = 0.75  # min probability of the chosen label to trust it
+    classifier_threshold: float = 0.6  # min probability of the chosen label to hint the prompt
     probe: ServiceProbe | None = None
     voices: VoicePreviews | None = None
     sessions: dict[str, DemoSession] = field(default_factory=dict)
