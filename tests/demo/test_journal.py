@@ -71,6 +71,28 @@ def test_an_explicit_correction_revises_and_keeps_the_old_text() -> None:
     assert len(journal.passages) == 1
 
 
+def test_a_confident_correction_applies_even_when_grounding_is_low() -> None:
+    # Regression (riva-skm.32): a real correction restates the entry, so the revised text scores
+    # low grounding against the short correction utterance. That soft flag must NOT block the
+    # revise when the model is sure (not uncertain, no invented facts) - it used to.
+    journal = Journal()
+    original = "Ich habe ein paar Fehler in meiner Software behoben. Das hat gut geklappt."
+    journal.apply(outcome_for(original, journal, append_json(original)), "t0")
+    revised = (
+        "Ich habe keine Fehler in meiner Masterarbeit-Software behoben, sondern sie "
+        "den ganzen Vormittag nur vorsichtig weiterentwickelt."
+    )
+    out = outcome_for(
+        "Korrektur: ich habe keine Fehler behoben, nur weiterentwickelt.",
+        journal,
+        revise_json("p0", revised, "keine Fehler behoben, nur weiterentwickelt"),
+    )
+    assert "low_grounding" in (out.validated.soft_flags if out.validated else ())
+    assert out.validated is not None and out.validated.result.uncertain is False
+    change = journal.apply(out, "t1")
+    assert change.kind == "revised" and journal.passages[0].text == revised
+
+
 @pytest.mark.parametrize(
     "extra",
     [{"uncertain": True}, {"added_facts": ["vier Löwen"]}],
