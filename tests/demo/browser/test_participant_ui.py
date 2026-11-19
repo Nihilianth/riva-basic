@@ -277,15 +277,18 @@ def test_only_one_control_button_is_shown_across_idle_active_stopped(
         page.wait_for_function("document.body.dataset.control === 'start'")
         assert page.locator("#riva-start").is_visible()
         assert not page.locator("#riva-stop").is_visible()
+        assert page.locator("#riva-intro").is_visible()  # explanation shown before start
         page.get_by_role("button", name="▶ Start").click()
         page.wait_for_function("document.body.dataset.control === 'stop'", timeout=90_000)
         assert page.locator("#riva-stop").is_visible()
         assert not page.locator("#riva-start").is_visible()
+        assert not page.locator("#riva-intro").is_visible()  # hidden during the active session
         page.get_by_role("button", name="⏹ Stopp").click()
         page.wait_for_function("window.__phases.at(-1) === 'stopped'", timeout=15_000)
         page.wait_for_function("document.body.dataset.control === 'start'")
         assert page.locator("#riva-start").is_visible()
         assert not page.locator("#riva-stop").is_visible()
+        assert page.locator("#riva-intro").is_visible()  # shown again after Stopp
 
 
 def test_laptop_landscape_shows_the_control_and_the_reply_together(
@@ -306,6 +309,12 @@ def test_laptop_landscape_shows_the_control_and_the_reply_together(
         # Both are on screen together (top within the viewport, no need to scroll to find them).
         assert start["y"] < 768 and reply["y"] < 768
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+        # Uses the screen width: content is NOT a narrow centered strip (the old 960px cap).
+        left = page.locator("#riva-left").bounding_box()
+        right = page.locator("#riva-right").bounding_box()
+        assert left and right
+        assert (left["width"] + right["width"]) > 0.8 * 1366  # columns span most of the width
+        assert right["x"] + right["width"] > 1366 * 0.9  # content reaches toward the right edge
         # Portrait/tablet keeps the usable stacked layout (reply below the control), no h-scroll.
         page.set_viewport_size({"width": 768, "height": 1024})
         start_p = page.locator("#riva-start").bounding_box()
@@ -366,7 +375,8 @@ def test_the_introduction_is_visible_first_and_nothing_starts_by_itself(
         assert not app.runtime.replies.runs
         page.get_by_role("button", name="▶ Start").click()
         page.wait_for_function(LISTENING, timeout=90_000)
-        assert intro.is_visible()  # stays available as a reminder
+        page.wait_for_function("document.body.dataset.control === 'stop'", timeout=15_000)
+        assert not intro.is_visible()  # hidden during the session (it is distracting)
 
 
 def test_a_reload_opens_an_isolated_session_and_closes_the_old_one(

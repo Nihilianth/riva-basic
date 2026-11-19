@@ -28,7 +28,8 @@ HEAD = (
 )  # the colors are designed for the light theme; a dark system setting must not change them
 
 CSS = """
-.gradio-container { max-width: 960px !important; margin: 0 auto; font-size: 1.25rem; }
+.gradio-container { max-width: 1600px !important; width: 100% !important; margin: 0 auto;
+  font-size: 1.25rem; padding-left: 1.5rem !important; padding-right: 1.5rem !important; }
 h1 { font-size: 2.6rem !important; text-align: center; }
 #riva-intro { padding: 1rem 1.4rem; border-radius: 1rem; background: #eff6ff; color: #111827;
   border: 3px solid #1d4ed8; font-size: 1.4rem; }
@@ -81,14 +82,15 @@ button:focus-visible, textarea:focus-visible, [role="tab"]:focus-visible, summar
 body[data-control="start"] #riva-stop { display: none !important; }
 body[data-control="stop"] #riva-start { display: none !important; }
 #riva-controls { gap: 1rem; }
+/* Hide the explanation once a session is active (it is distracting during the conversation). */
+body[data-control="stop"] #riva-intro { display: none; }
 /* Two columns: controls left, produced text right, so a laptop sees button and reply together. */
 #riva-main { gap: 1.4rem; align-items: stretch; }
 @media (max-width: 900px) { #riva-main { flex-direction: column; } }  /* phone/tablet: stacked */
 @media (min-width: 901px) {
-  .gradio-container { max-width: 1200px !important; }
   #riva-main { flex-wrap: nowrap !important; }
-  #riva-left { flex: 0 0 40% !important; min-width: 0 !important; }
-  #riva-right { flex: 1 1 60% !important; min-width: 0 !important; }
+  #riva-left { flex: 0 0 34% !important; min-width: 0 !important; }
+  #riva-right { flex: 1 1 66% !important; min-width: 0 !important; }
 }
 /* Landscape on a short laptop viewport: compact the tall header so text + button fit together. */
 @media (orientation: landscape) and (max-height: 820px) {
@@ -195,7 +197,10 @@ INDICATOR_JS = """
     if (last.startsWith('FAILED')) return 'mic_blocked';
     if (window.rivaStopped || server === 'stopped') return 'stopped';
     if (!window.rivaDemoClicked) return 'idle';
-    if (!stages.includes('listening')) return 'starting';
+    // Once the mic has ever gone live, never fall back to 'starting': the 'listening' stage scrolls
+    // out of the short `stages` buffer, and `vad.live` can read false between pause and resume.
+    if (vad.live || stages.includes('listening')) window.rivaEverLive = true;
+    if (!window.rivaEverLive) return 'starting';
     if (vad.speaking) return 'hearing';
     if (window.rivaIsPlaying && window.rivaIsPlaying()) return 'speaking';
     if (server === 'idle') return 'listening';
@@ -351,7 +356,9 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
         session.interrupt("participant_stop")
         return _values(session, asr.get_vad_diagnostics(identity))
 
-    app = gr.Blocks(title=texts.PAGE_TITLE, analytics_enabled=False)
+    # fill_width: use the whole screen width (Gradio otherwise caps the content ~1280px and
+    # centres it, which looks like a narrow vertical strip on a laptop). CSS then caps it at 1600.
+    app = gr.Blocks(title=texts.PAGE_TITLE, analytics_enabled=False, fill_width=True)
     with app:
         identity = gr.State(
             value=new_development_session, time_to_live=3600, delete_callback=runtime.release
