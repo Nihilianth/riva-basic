@@ -755,6 +755,7 @@ async (enabled) => {
     vad.speaking = false;
     vad.speechStartMs = null;
     vad.enabled = false;
+    vad.live = false;
     vad.paused = true;
     try { if (vad.instance) vad.instance.pause(); } catch (_) {}
     stage("stopped");
@@ -762,8 +763,12 @@ async (enabled) => {
   if (enabled && window.rivaVad.paused && window.rivaVad.instance) {
     window.rivaVad.discard = false;
     window.rivaVad.paused = false;
+    setInterval(() => {
+      if (window.rivaIsPlaying && window.rivaIsPlaying()) window.rivaVad.lastPlayingAt = Date.now();
+    }, 100);
     window.rivaVad.enabled = true;
     await window.rivaVad.instance.start();
+    window.rivaVad.live = true;
     stage("listening");
     return;
   }
@@ -773,6 +778,7 @@ async (enabled) => {
   }
   if (!enabled) {
     window.rivaVad.enabled = false;
+    window.rivaVad.live = false;
     window.rivaVad.pending = [];
     if (window.rivaVad.instance) window.rivaVad.instance.pause();
     stage("paused");
@@ -844,6 +850,19 @@ async (enabled) => {
       additionalAudioConstraints: {autoGainControl: false},
       onSpeechStart: () => {
         if (window.rivaVad.discard) return;
+        // Deaf while a reply plays (plus a short tail): the VAD would hear the loudspeaker.
+        const playing = window.rivaIsPlaying && window.rivaIsPlaying();
+        const sincePlay = Date.now() - (window.rivaVad.lastPlayingAt || 0);
+        if (playing || sincePlay < 700) {
+          window.rivaVad.ignoring = true;
+          // Make the block visible in the presenter's VAD readout: why, and how many in a row.
+          // A count that climbs while nothing is audibly playing points at a stuck rivaIsPlaying().
+          const n = window.rivaVad.ignoredRun = (window.rivaVad.ignoredRun || 0) + 1;
+          stage("ignored: reply " + (playing ? "playing" : "tail") + " (x" + n + ")");
+          return;
+        }
+        window.rivaVad.ignoredRun = 0;
+        window.rivaVad.ignoring = false;
         window.rivaVad.speechStartMs = performance.now();
         window.rivaVad.speaking = true;
         if (window.rivaHoldReplyAudio) window.rivaHoldReplyAudio();
@@ -851,6 +870,7 @@ async (enabled) => {
       },
       onSpeechRealStart: () => {
         if (window.rivaVad.discard) return;
+        if (window.rivaVad.ignoring) return;
         // Confirmed speech (not a misfire): the backend stops/holds replies for it.
         fireSpeech("start", window.rivaVad.speechStartMs || performance.now());
         stage("speech confirmed");
@@ -858,6 +878,11 @@ async (enabled) => {
       onSpeechEnd: (audio) => {
         if (window.rivaVad.discard) {
           stage("discarded");
+          return;
+        }
+        if (window.rivaVad.ignoring) {
+          window.rivaVad.ignoring = false;
+          stage("ignored (reply playing)");
           return;
         }
         // Loudness gate: a segment quieter than the presenter's threshold (e.g. someone across
@@ -907,15 +932,18 @@ async (enabled) => {
       },
       onVADMisfire: () => {
         window.rivaVad.speaking = false;
+        if (window.rivaVad.ignoring) { window.rivaVad.ignoring = false; return; }
         if (window.rivaResumeReplyAudio) window.rivaResumeReplyAudio();
         stage("misfire (too short)");
       },
     });
     window.rivaVad.enabled = true;
     await window.rivaVad.instance.start();
+    window.rivaVad.live = true;
     stage("listening");
   } catch (error) {
     window.rivaVad.enabled = false;
+    window.rivaVad.live = false;
     const raw = String((error && error.name) || "Error");
     const name = raw.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40);
     const text = String((error && error.message) || "");

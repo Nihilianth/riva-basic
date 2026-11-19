@@ -84,7 +84,8 @@ body[data-control="stop"] #riva-start { display: none !important; }
 #riva-controls { gap: 1rem; }
 /* Hide the explanation once a session is active (it is distracting during the conversation). */
 body[data-control="stop"] #riva-intro { display: none; }
-/* Two columns: controls left, produced text right, so a laptop sees button and reply together. */
+/* Two columns: controls left, produced text right, so a laptop sees button and reply together.
+   Gradio sets inline min-width/flex on columns, so the wide rules use !important to win. */
 #riva-main { gap: 1.4rem; align-items: stretch; }
 @media (max-width: 900px) { #riva-main { flex-direction: column; } }  /* phone/tablet: stacked */
 @media (min-width: 901px) {
@@ -187,6 +188,26 @@ INDICATOR_JS = """
   // One control at a time: `start` when idle/stopped/finished, `stop` while a turn is active. CSS
   // (body[data-control]) hides the other button; the tick below keeps it in sync with the phase.
   if (document.body) document.body.dataset.control = 'start';
+  // Scroll guard: when Gradio re-renders the page (e.g. an answer arrives), the browser can throw
+  // the scroll position to the top. A jump up that the participant did not cause is undone.
+  let lastY = window.scrollY, userAt = 0, restoreUntil = 0;
+  const touched = () => { userAt = Date.now(); restoreUntil = 0; };
+  for (const name of ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown', 'mousedown'])
+    window.addEventListener(name, touched, {capture: true, passive: true});
+  const restore = () => {
+    if (!restoreUntil || Date.now() > restoreUntil) { restoreUntil = 0; return; }
+    if (Math.abs(window.scrollY - lastY) > 2) window.scrollTo(0, lastY);
+    requestAnimationFrame(restore);
+  };
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY;
+    if (y < lastY - 120 && Date.now() - userAt > 600) {  // sudden jump up, no user input
+      restoreUntil = Date.now() + 800;
+      requestAnimationFrame(restore);
+      return;
+    }
+    if (!restoreUntil) lastY = y;
+  }, {passive: true});
   let shown = '', closedSince = 0;
   const compute = () => {
     const server = window.rivaServerPhase || 'idle';
@@ -361,7 +382,9 @@ def build_participant_app(runtime: "DemoRuntime") -> "gr.Blocks":
     app = gr.Blocks(title=texts.PAGE_TITLE, analytics_enabled=False, fill_width=True)
     with app:
         identity = gr.State(
-            value=new_development_session, time_to_live=3600, delete_callback=runtime.release
+            value=new_development_session,
+            time_to_live=7 * 24 * 3600,
+            delete_callback=runtime.release,
         )
         gr.Markdown(f"# {texts.TITLE}\n\n{texts.SUBTITLE}")
         gr.HTML(INTRO_HTML)
