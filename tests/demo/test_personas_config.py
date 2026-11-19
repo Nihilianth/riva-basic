@@ -112,6 +112,13 @@ def test_turn_input_marks_the_transcript_as_data_and_carries_context() -> None:
     assert "Das Tagebuch ist noch leer." in build_input(TurnContext(transcript="Hallo"))
 
 
+def test_unreliable_asr_adds_a_clarification_hint_to_the_prompt() -> None:
+    flagged = build_input(TurnContext(transcript="我 Sport mit", asr_uncertain=True))
+    assert "clarification_needed" in flagged and "unsicher" in flagged
+    clean = build_input(TurnContext(transcript="Heute war ich im Zoo.", asr_uncertain=False))
+    assert "clarification_needed" not in clean
+
+
 def test_the_whole_journal_story_is_shown_but_only_the_tail_carries_revisable_ids() -> None:
     text = build_input(
         TurnContext(

@@ -64,6 +64,16 @@ def test_failed_asr_is_still_unusable_and_errors(tmp_path) -> None:
     assert h.session.on_segment(outcome, h.session.token()) == "unusable"
 
 
+def test_foreign_script_transcript_marks_the_prompt_as_uncertain(tmp_path) -> None:
+    h = make_harness(tmp_path)
+    report = h.answer("我 Sport mit")  # foreign-script recognition -> flagged as unreliable
+    assert report is not None
+    utterance = json.loads(
+        (h.archive.directory / "utterances" / f"{report.utterance_id}.json").read_text()
+    )
+    assert "clarification_needed" in utterance["llm_input"]  # the LLM is told to ask, not invent
+
+
 def test_a_turn_updates_journal_archive_and_starts_the_reply(tmp_path, capsys) -> None:
     h = make_harness(tmp_path)
     h.synth.release.set()

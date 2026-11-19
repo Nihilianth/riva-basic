@@ -33,6 +33,26 @@ def words(text: str) -> list[str]:
     return [match.group(0) for match in _WORD.finditer(text)]
 
 
+def _is_latin_letter(char: str) -> bool:
+    try:
+        return unicodedata.name(char).startswith("LATIN")
+    except ValueError:
+        return False
+
+
+def asr_looks_unreliable(text: str) -> bool:
+    """Free heuristic: a German utterance should contain no non-Latin letters.
+
+    Any letter from another script (CJK, Thai, Cyrillic, ...) in a German speaker's transcript is
+    almost certainly a recognition error (e.g. ``我 die der`` or ``ขัว Sport``). Accented Latin
+    letters (é, ü, ...) and digits/punctuation are fine. Conservative by design: it only flags
+    clear foreign-script content, so normal speech and short fillers are never flagged. A ``True``
+    result marks the transcript as low-confidence input for the LLM (ask instead of invent); it does
+    not drop or change the transcript.
+    """
+    return any(char.isalpha() and not _is_latin_letter(char) for char in text)
+
+
 def looks_german(text: str) -> bool:
     """Heuristic: reject text that is clearly English; accept short texts that show no English.
 

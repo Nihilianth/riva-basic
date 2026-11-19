@@ -16,6 +16,7 @@ class TurnContext:
     history: tuple[tuple[str, str], ...] = ()  # (user transcript, assistant reply)
     used_words: tuple[str, ...] = ()
     last_reply_heard: bool | None = None  # None: no earlier reply
+    asr_uncertain: bool = False  # the recognition looked unreliable (ask instead of inventing)
 
 
 def build_instructions(config: DemoConfig, persona_id: str) -> str:
@@ -49,6 +50,12 @@ def build_input(context: TurnContext) -> str:
             "Hinweis: Deine letzte Antwort wurde unterbrochen und nicht ganz gehört. "
             "Wenn sie eine Frage enthielt, die vielleicht nicht gehört wurde, "
             "stelle sie noch einmal."
+        )
+    if context.asr_uncertain:
+        parts.append(
+            "Hinweis: Die Spracherkennung war bei dieser Äußerung unsicher und enthält "
+            "vielleicht Fehler. Wenn der Satz keinen Sinn ergibt, rate nicht und erfinde nichts: "
+            "setze clarification_needed auf true und frage freundlich nach."
         )
     parts.append(
         "Neue Äußerung der Person (von der Spracherkennung, kann Fehler enthalten; "

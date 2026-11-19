@@ -21,6 +21,7 @@ from riva.demo.archive import SessionArchive
 from riva.demo.config import DemoConfig
 from riva.demo.journal import Journal, JournalChange
 from riva.demo.prompts import TurnContext
+from riva.demo.text import asr_looks_unreliable
 from riva.demo.turn import TurnOutcome, TurnProcessor
 from riva.experiments.asr_stream import (
     AsrSessions,
@@ -249,6 +250,7 @@ class DemoSession:
             history=tuple(self.history[-self.config.history_exchanges :]),
             used_words=tuple(self.used_words),
             last_reply_heard=self.last_reply_heard,
+            asr_uncertain=asr_looks_unreliable(text),
         )
 
     def _reply_config(self) -> ReplyConfig:
