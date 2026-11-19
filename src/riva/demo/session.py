@@ -18,6 +18,7 @@ from uuid import uuid4
 from riva.audio.recordings import SavedRecording, SessionIdentity
 from riva.audio.replies import ReplyConfig, ReplyManager, ReplyRun
 from riva.demo.archive import SessionArchive
+from riva.demo.classifier import Classifier
 from riva.demo.config import DemoConfig
 from riva.demo.journal import Journal, JournalChange
 from riva.demo.prompts import TurnContext
@@ -69,11 +70,17 @@ class DemoSession:
         replies: ReplyManager,
         archive: SessionArchive,
         monotonic: Callable[[], float] = time.monotonic,
+        classifier: Classifier | None = None,
+        classifier_enabled: Callable[[], bool] = lambda: False,
+        classifier_threshold: float = 0.75,
     ) -> None:
         config.check_choice(settings.persona_id, settings.model, settings.voice)
         self.identity, self.config, self.settings = identity, config, settings
         self.processor, self.asr, self.replies, self.archive = processor, asr, replies, archive
         self.monotonic = monotonic
+        self.classifier = classifier
+        self.classifier_enabled = classifier_enabled  # read live so the presenter toggle applies
+        self.classifier_threshold = classifier_threshold
         self.created_at = monotonic()
         self.last_seen = self.created_at
         self.close_reason = ""
@@ -242,7 +249,7 @@ class DemoSession:
 
     # --- one turn ---------------------------------------------------------------------------
 
-    def _context(self, text: str) -> TurnContext:
+    def _context(self, text: str, classified: str | None = None) -> TurnContext:
         return TurnContext(
             transcript=text,
             journal_story=self.journal.older_text(),  # whole story so far (read-only, no ids)
@@ -251,7 +258,30 @@ class DemoSession:
             used_words=tuple(self.used_words),
             last_reply_heard=self.last_reply_heard,
             asr_uncertain=asr_looks_unreliable(text),
+            classified=classified,
         )
+
+    def _classify(self, text: str) -> str | None:
+        """Optional Jev classification of the utterance (meta/correction/diary). Advisory only.
+
+        Returns the label to hint the LLM with when confident, else None (fall back to prompt-only).
+        Always records a ``classified`` event (label, probability, latency_ms) for profiling/review.
+        """
+        if self.classifier is None or not self.classifier_enabled():
+            return None
+        result = self.classifier.classify(text)
+        if result is None:
+            return None
+        used = result.probability >= self.classifier_threshold
+        self.archive.event(
+            "classified",
+            label=result.label,
+            probability=round(result.probability, 3),
+            latency_ms=round(result.latency_ms),
+            threshold=self.classifier_threshold,
+            used=used,
+        )
+        return result.label if used else None
 
     def _reply_config(self) -> ReplyConfig:
         persona = self.config.persona(self.settings.persona_id)
@@ -272,11 +302,12 @@ class DemoSession:
     ) -> TurnReport | None:
         """LLM turn, journal and spoken reply for one merged utterance (blocks during the LLM)."""
         utterance_id = uuid4().hex
+        classified = self._classify(merged_text)  # network call: outside the lock
         with self.lock:
             if self.closed or token.epoch != self.epoch:
                 self._discard("before_llm", utterance=utterance_id)
                 return None
-            context = self._context(merged_text)
+            context = self._context(merged_text, classified)
             revisable = self.journal.revisable_ids()
             settings = self.settings
         self.archive.event("turn_started", utterance=utterance_id, segments=segment_ids)

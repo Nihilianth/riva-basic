@@ -70,6 +70,8 @@ class DemoRuntime:
     monotonic: Callable[[], float] = time.monotonic
     pause_ms: int = 900  # VAD pause threshold read by new participant pages (/riva/settings)
     mic_level: int = 0  # loudness gate (0-100, 0 = off); read by new participant pages
+    classifier_enabled: bool = False  # toggle the optional meta/correction/diary classifier
+    classifier_threshold: float = 0.75  # min probability of the chosen label to trust it
     probe: ServiceProbe | None = None
     voices: VoicePreviews | None = None
     sessions: dict[str, DemoSession] = field(default_factory=dict)
@@ -91,6 +93,9 @@ class DemoRuntime:
                     replies=self.replies,
                     archive=SessionArchive(self.archive_root, identity),
                     monotonic=self.monotonic,
+                    classifier=self.providers.classifier,
+                    classifier_enabled=lambda: self.classifier_enabled,
+                    classifier_threshold=self.classifier_threshold,
                 )
                 self.sessions[identity.session_id] = session
                 self._prune_closed()
@@ -113,6 +118,10 @@ class DemoRuntime:
             raise ValueError(f"mic level must be {MIN_MIC_LEVEL}-{MAX_MIC_LEVEL}")
         self.mic_level = int(value)
         return self.mic_level
+
+    def set_classifier_enabled(self, enabled: bool) -> bool:
+        self.classifier_enabled = bool(enabled)
+        return self.classifier_enabled
 
     def stop_all(self) -> int:
         """Alles anhalten = Stopp for every active session; returns how many were stopped."""
@@ -309,11 +318,19 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=7863)
     parser.add_argument("--config-dir", type=Path, default=None, help="folder with TOML overrides")
     parser.add_argument("--fake", action="store_true", help="offline: fake ASR, LLM and TTS")
+    parser.add_argument(
+        "--classifier",
+        action="store_true",
+        help="route meta/correction/diary turns with the TypeSafe Jev classifier "
+        "(needs TYPESAFE_API_KEY; real calls even with --fake)",
+    )
     args = parser.parse_args()
     if not args.fake and not os.environ.get("OPENAI_API_KEY", "").strip():
         parser.error(
             "OPENAI_API_KEY missing. Run: uv run --env-file .env riva-demo (or use --fake)"
         )
+    if args.classifier and not os.environ.get("TYPESAFE_API_KEY", "").strip():
+        parser.error("--classifier needs TYPESAFE_API_KEY (in .env). Run with --env-file .env.")
     if not 1 <= args.port <= 65535:
         parser.error("Invalid port")
     import uvicorn
@@ -321,13 +338,21 @@ def main() -> None:
     config = load_config(args.config_dir)
     root = prepare_environment(args.private_dir)
     providers = fake_providers() if args.fake else real_providers()
+    if args.classifier and providers.classifier is None:  # --fake still gets a real Jev classifier
+        from dataclasses import replace
+
+        from riva.demo.classifier import JevClassifier
+
+        providers = replace(providers, classifier=JevClassifier())
     runtime = build_runtime(
         config,
         providers,
         root / "research-data" / "demo-1",
         probe=FakeProbe() if args.fake else OpenAIProbe(),
     )
+    runtime.classifier_enabled = args.classifier
     mode = "FAKE providers, no paid calls" if args.fake else "OpenAI ASR, LLM and TTS (paid)"
+    mode += ", Jev classifier ON" if args.classifier else ""
     print(f"Demo 1: http://localhost:{args.port}  [{mode}]")
     uvicorn.run(build_demo_api(runtime), host=HOST, port=args.port, log_level="warning")
 

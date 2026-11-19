@@ -262,6 +262,12 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
             "wenn ein Teilnehmer Start drückt."
         )
 
+    def toggle_classifier(enabled: bool) -> str:
+        runtime.set_classifier_enabled(bool(enabled))
+        if enabled and runtime.providers.classifier is None:
+            return "⚠ Kein Klassifizierer verfügbar (Server ohne Schlüssel gestartet)."
+        return "✅ Klassifizierung ist an." if enabled else "Klassifizierung ist aus."
+
     def apply_active(persona: str, model: str, voice: str, session_id: str | None) -> str:
         session = runtime.get(session_id) if session_id else None
         if session is None or session.closed:
@@ -354,6 +360,12 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
                     label="Mikrofon-Schwelle (0 = aus)",
                     info="Leiser als dieser Pegel wird ignoriert (gegen Stimmen im Raum).",
                 )  # fmt: skip
+            classifier_toggle = gr.Checkbox(
+                value=runtime.classifier_enabled,
+                label="Meta-Klassifizierung (Jev) aktiv",
+                info="Stuft jede Äußerung ein (meta / Berichtigung / Tagebuch).",
+                elem_id="set-classifier",
+            )
             with gr.Row():
                 save_button = gr.Button("Für neue Sitzungen speichern", elem_id="set-save")
                 apply_button = gr.Button("Auf gewählte Sitzung anwenden", elem_id="set-apply")
@@ -413,6 +425,7 @@ def build_presenter_app(runtime: "DemoRuntime") -> "gr.Blocks":
         apply_button.click(
             apply_active, [persona, model, voice, selected], [settings_result], **hide
         )
+        classifier_toggle.change(toggle_classifier, [classifier_toggle], [settings_result], **hide)
         stop_button.click(stop_all, outputs=[action_result], **hide)
         end_button.click(end_selected, [selected], [action_result], **hide)
         end_all_button.click(end_all, outputs=[action_result], **hide)

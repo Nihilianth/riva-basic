@@ -17,6 +17,7 @@ class TurnContext:
     used_words: tuple[str, ...] = ()
     last_reply_heard: bool | None = None  # None: no earlier reply
     asr_uncertain: bool = False  # the recognition looked unreliable (ask instead of inventing)
+    classified: str | None = None  # confident classifier label: "diary" | "correction" | "meta"
 
 
 def build_instructions(config: DemoConfig, persona_id: str) -> str:
@@ -56,6 +57,16 @@ def build_input(context: TurnContext) -> str:
             "Hinweis: Die Spracherkennung war bei dieser Äußerung unsicher und enthält "
             "vielleicht Fehler. Wenn der Satz keinen Sinn ergibt, rate nicht und erfinde nichts: "
             "setze clarification_needed auf true und frage freundlich nach."
+        )
+    if context.classified in ("diary", "correction", "meta"):
+        kinds = {
+            "diary": "Inhalt für das Tagebuch (etwas über ihren Tag)",
+            "correction": "eine Berichtigung eines früheren Eintrags",
+            "meta": "eine Bemerkung oder Frage über dich oder das Gespräch",
+        }
+        parts.append(
+            f"Hinweis (automatische Einstufung): Diese Äußerung wurde als "
+            f"{kinds[context.classified]} eingestuft. Behandle sie entsprechend (siehe Punkt 4)."
         )
     parts.append(
         "Neue Äußerung der Person (von der Spracherkennung, kann Fehler enthalten; "

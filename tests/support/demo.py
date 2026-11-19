@@ -79,6 +79,23 @@ class DemoHarness:
         return [event["event"] for event in self.events()]
 
 
+class ScriptedClassifier:
+    """Deterministic classifier for tests: returns a fixed label + probability (or None)."""
+
+    def __init__(self, label: str | None = "diary", probability: float = 0.99,
+                 latency_ms: float = 12.0) -> None:  # fmt: skip
+        self.label, self.probability, self.latency_ms = label, probability, latency_ms
+        self.calls = 0
+
+    def classify(self, text: str) -> Any:
+        from riva.demo.classifier import Classification
+
+        self.calls += 1
+        if self.label is None:
+            return None  # simulate unavailable / unparseable / error
+        return Classification(self.label, self.probability, self.latency_ms)
+
+
 def make_harness(
     tmp_path: Path,
     replies: Any = None,
@@ -86,6 +103,9 @@ def make_harness(
     gated_llm: bool = False,
     wire: Any = SyntheticWire,
     settings: SessionSettings | None = None,
+    classifier: Any = None,
+    classifier_enabled: bool = False,
+    classifier_threshold: float = 0.75,
 ) -> DemoHarness:
     config = load_config()
     identity = new_development_session()
@@ -104,5 +124,8 @@ def make_harness(
         asr=asr,
         replies=manager,
         archive=archive,
+        classifier=classifier,
+        classifier_enabled=lambda: classifier_enabled,
+        classifier_threshold=classifier_threshold,
     )
     return DemoHarness(session, asr, manager, archive, llm, synth, tmp_path)

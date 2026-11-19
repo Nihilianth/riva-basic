@@ -6,6 +6,7 @@ from typing import Protocol
 
 from riva.audio.replies import ReplyConfig, TextPart
 from riva.audio.transcription import Wire
+from riva.demo.classifier import Classifier
 from riva.demo.turn import TurnLLM
 
 
@@ -20,6 +21,7 @@ class Providers:
     llm: TurnLLM
     speech: SpeechSynth
     wire_factory: Callable[[], Wire]
+    classifier: Classifier | None = None  # optional meta/correction/diary classifier (off default)
 
 
 class SpokenReplyProvider:
@@ -42,9 +44,12 @@ def real_providers() -> Providers:
     """OpenAI ASR, LLM and TTS (paid; needs OPENAI_API_KEY in the environment)."""
     from riva.audio.replies import OpenAIReplyProvider
     from riva.audio.transcription import connect_openai
+    from riva.demo.classifier import JevClassifier
     from riva.demo.openai_llm import OpenAITurnLLM
 
-    return Providers(OpenAITurnLLM(), OpenAIReplyProvider(), connect_openai)
+    return Providers(
+        OpenAITurnLLM(), OpenAIReplyProvider(), connect_openai, classifier=JevClassifier()
+    )
 
 
 def fake_providers() -> Providers:

@@ -112,7 +112,10 @@ class TurnProcessor:
             raw.append(reply.text)
             try:
                 validated = validate_turn(
-                    parse_turn(reply.text), context.transcript, revisable_ids=revisable_ids
+                    parse_turn(reply.text),
+                    context.transcript,
+                    revisable_ids=revisable_ids,
+                    meta_hint=context.classified == "meta",
                 )
             except TurnResultError as error:
                 codes.append(error.code)
