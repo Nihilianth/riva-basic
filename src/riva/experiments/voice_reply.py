@@ -409,6 +409,30 @@ if (!window.rivaPlaybackInstalled) {
     run.sources.clear();
     note(reason);
   };
+  // A reply that plays out is done: clear `current` so rivaIsPlaying() goes false. It is NOT
+  // enough to wait for sources to drain via onended - a single missed onended (clock drift, a
+  // dropped event, a suspend/resume) would leave current.sources non-empty and rivaIsPlaying()
+  // stuck true, which keeps the VAD's deaf-while-playing guard on forever.
+  const finish = (run, tag) => {
+    if (run.done) return;
+    run.done = true;
+    run.sources.forEach((source) => { try { source.stop(); } catch (_) {} });
+    run.sources.clear();
+    if (current === run) current = null;
+    if (!run.aborted) note(tag || 'ended');
+  };
+  // Watchdog: once the stream has fully arrived, clear `current` when the scheduled end time
+  // passes even if some onended never fires. While the context is suspended (barge-in hold) the
+  // audio clock is frozen, so we wait rather than finish early.
+  const watchEnd = (run) => {
+    if (run.done || run.aborted || current !== run) return;
+    if (!run.sources.size) { finish(run); return; }
+    // The scheduled end passed but sources are still registered: an onended was missed, which is
+    // exactly what would have stuck rivaIsPlaying() true. Clear it and flag it distinctly.
+    if (ctx && ctx.state === 'running' && ctx.currentTime >= run.next - 0.05) {
+      finish(run, 'ended_watchdog');
+    } else setTimeout(() => watchEnd(run), 120);
+  };
   const schedule = (run, bytes) => {
     const count = bytes.length / 2;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
@@ -425,7 +449,7 @@ if (!window.rivaPlaybackInstalled) {
     run.sources.add(source);
     source.onended = () => {
       run.sources.delete(source);
-      if (run.finished && !run.sources.size && !run.aborted) note('ended');
+      if (run.finished && !run.sources.size) finish(run);
     };
     if (!run.started) {
       run.started = true;
@@ -443,7 +467,7 @@ if (!window.rivaPlaybackInstalled) {
     ensureContext();
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (_) {} }
     const run = {id: id, abort: new AbortController(), sources: new Set(), next: 0,
-                 started: false, finished: false, aborted: false, suspended: false};
+                 started: false, finished: false, aborted: false, suspended: false, done: false};
     current = run;
     note('stream_started');
     try {
@@ -467,7 +491,7 @@ if (!window.rivaPlaybackInstalled) {
         if (usable && !run.aborted) schedule(run, bytes.subarray(0, usable));
       }
       run.finished = true;
-      if (!run.sources.size && !run.aborted) note('ended');
+      watchEnd(run);
     } catch (error) {
       if (!run.aborted) note('stream_error_' + String((error && error.name) || 'Error'));
     }
